@@ -188,7 +188,7 @@ const DOT_ROOM_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 // chatgpt.com/dots/<id> takes it. It is what a send opens and checks
 // the tab's address against (a thread's address redirects to
 // /dots/home).
-export const DOT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}~[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const DOT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}~[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 // DOT_THREAD_RE is a dot thread id as tincan takes it (hex and hyphens).
 const DOT_THREAD_RE = /^[0-9A-Fa-f-]{8,64}$/;
 
@@ -1433,10 +1433,12 @@ export function createRunner({ fetch, sender = null, reload = null, permissions 
     async 'dots.primary'() {
       const auth = await chatgptAuth();
       const p = (await getJSON(`${CHATGPT}/backend-api/tbo/primary`, auth, true))?.profile;
-      if (!isPlainObject(p) || typeof p.active_root_thread_id !== 'string' || !DOT_THREAD_RE.test(p.active_root_thread_id) || typeof p.id !== 'string' || !DOT_ID_RE.test(p.id)) {
+      if (!isPlainObject(p)) throw new OpError('endpoint_changed', 'unexpected primary dot');
+      const { active_root_thread_id: thread, id: dot, display_name: name } = p;
+      if (typeof thread !== 'string' || !DOT_THREAD_RE.test(thread) || typeof dot !== 'string' || !DOT_ID_RE.test(dot)) {
         throw new OpError('endpoint_changed', 'unexpected primary dot');
       }
-      return { thread: p.active_root_thread_id, dot: p.id, name: typeof p.display_name === 'string' ? p.display_name.slice(0, 100) : '' };
+      return { thread, dot, name: typeof name === 'string' ? name.slice(0, 100) : '' };
     },
     // A dot has one DM, so the send needs its thread and has no new chat.
     // The tab opens the dot's own id (DOT_ID_RE), which the record gives.

@@ -62,8 +62,8 @@ func dotsCanonicalID(id string) (string, bool) {
 	return id, dotsThreadPattern.MatchString(id) && validNativeID(id)
 }
 
-// dotsConvPath is a dot's DM path on chatgpt.com in its older form,
-// /dots/<thread> (the DM now lives at /dots/<dot id>, which names no thread).
+// dotsConvPath matches a dot's thread address, /dots/<thread>. The DM page
+// itself is at /dots/<dot id>, which names no thread.
 var dotsConvPath = regexp.MustCompile(`^/dots/([0-9A-Fa-f-]{8,64})/?$`)
 
 // dotsNotLoggedIn is the not_logged_in reason for a dot.
