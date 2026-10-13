@@ -936,7 +936,12 @@ export function createSender({
         if (base.loggedOut) throw new OpError('not_logged_in', 'logged out while sending');
         if (base.blocked) throw blockedErr();
         if (base.generating) throw answering();
-        if (feed) await hooks.before();
+        if (feed) {
+          await hooks.before();
+          // before reads the backend, so the page may have moved meanwhile:
+          // check its address again right before the click.
+          if ((await urlId()) !== pageId) throw new OpError('not_found', 'conversation not found');
+        }
         if (images) {
           inputActive();
           const state = await inject(tab.id, pageInputImages, [images, false]);

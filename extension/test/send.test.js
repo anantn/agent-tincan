@@ -1595,6 +1595,27 @@ test('dots.send refuses a page that moves to /dots/home after it loaded, before 
   assert.deepEqual(fc.log.removed, [100]);
 });
 
+// The pre-click hook reads the backend, so the page can move while it
+// runs; the address is checked again after it, right before the click.
+test('dots.send refuses a page that moves to /dots/home while the pre-click hook runs', async () => {
+  let page;
+  const fc = fakeChrome((url) => (page = dotSite(url)));
+  const hooks = {
+    page: DOT_ID,
+    ready: async () => {},
+    before: async () => {
+      page.href = 'https://chatgpt.com/dots/home';
+    },
+    confirm: async () => 'never',
+  };
+  let caught;
+  await assert.rejects(sender(fc).send('dots', { message: 'x', conversation_id: DOT_THREAD }, hooks), (e) => ((caught = e), e.code === 'not_found'));
+  assert.notEqual(caught.clicked, true);
+  assert.deepEqual(page.submitted, []);
+  assert.equal(fc.log.scripts.filter((x) => x.func === pageSubmit).length, 0, 'no click');
+  assert.deepEqual(fc.log.removed, [100]);
+});
+
 test('dots.close closes only the tab its send opened', async () => {
   const fc = fakeChrome((url) => dotSite(url));
   fc.tabs.set(2, dotSite(DOT_PAGE)); // the owner's own DM tab
