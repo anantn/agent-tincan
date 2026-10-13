@@ -189,6 +189,8 @@ const DOT_ROOM_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 // the tab's address against (a thread's address redirects to
 // /dots/home).
 export const DOT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}~[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+// DOT_THREAD_RE is a dot thread id as tincan takes it (hex and hyphens).
+const DOT_THREAD_RE = /^[0-9A-Fa-f-]{8,64}$/;
 
 // Argument kinds: 'count' is a required integer 1..MAX_COUNT, 'id' a
 // required id, 'id?' an optional id, 'bool?' an optional boolean and
@@ -225,6 +227,7 @@ const SPEC = Object.freeze({
   'copilot.send': SEND_SPEC,
   'copilot.close': CLOSE_SPEC,
   'dots.detail': Object.freeze({ id: 'id' }),
+  'dots.primary': Object.freeze({}),
   'dots.send': SEND_SPEC,
   'dots.close': CLOSE_SPEC,
   'extension.reload': Object.freeze({}),
@@ -1422,6 +1425,18 @@ export function createRunner({ fetch, sender = null, reload = null, permissions 
         throw e;
       }
       return { thread: a.id, room: d.room, owner: d.owner, paused: d.paused, items };
+    },
+    // dots.primary names the account's primary dot for web install, which
+    // can no longer read a thread from the dot's address: its current
+    // thread (any of a dot's threads finds its record), its id and its
+    // name.
+    async 'dots.primary'() {
+      const auth = await chatgptAuth();
+      const p = (await getJSON(`${CHATGPT}/backend-api/tbo/primary`, auth, true))?.profile;
+      if (!isPlainObject(p) || typeof p.active_root_thread_id !== 'string' || !DOT_THREAD_RE.test(p.active_root_thread_id) || typeof p.id !== 'string' || !DOT_ID_RE.test(p.id)) {
+        throw new OpError('endpoint_changed', 'unexpected primary dot');
+      }
+      return { thread: p.active_root_thread_id, dot: p.id, name: typeof p.display_name === 'string' ? p.display_name.slice(0, 100) : '' };
     },
     // A dot has one DM, so the send needs its thread and has no new chat.
     // The tab opens the dot's own id (DOT_ID_RE), which the record gives.

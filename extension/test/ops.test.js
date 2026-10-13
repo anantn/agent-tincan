@@ -36,7 +36,7 @@ const SESSION = 'https://chatgpt.com/api/auth/session';
 const TOKEN = 'secret-access-token-never-returned';
 
 test('validate accepts only the fixed operation set with exact args', () => {
-  assert.deepEqual([...OPS].sort(), ['chatgpt.close', 'chatgpt.detail', 'chatgpt.file', 'chatgpt.list', 'chatgpt.send', 'claudeai.close', 'claudeai.detail', 'claudeai.file', 'claudeai.list', 'claudeai.send', 'copilot.close', 'copilot.detail', 'copilot.list', 'copilot.send', 'dots.close', 'dots.detail', 'dots.send', 'extension.reload', 'gemini.close', 'gemini.detail', 'gemini.file', 'gemini.list', 'gemini.send', 'grok.close', 'grok.detail', 'grok.file', 'grok.list', 'grok.send', 'perplexity.close', 'perplexity.detail', 'perplexity.send', 'chatgpt.input_abort', 'chatgpt.input_begin', 'chatgpt.input_chunk', 'chatgpt.send_images', ...['chatgpt', 'claudeai', 'grok', 'gemini', 'perplexity', 'copilot', 'dots'].map(site => site + '.session')].sort());
+  assert.deepEqual([...OPS].sort(), ['chatgpt.close', 'chatgpt.detail', 'chatgpt.file', 'chatgpt.list', 'chatgpt.send', 'claudeai.close', 'claudeai.detail', 'claudeai.file', 'claudeai.list', 'claudeai.send', 'copilot.close', 'copilot.detail', 'copilot.list', 'copilot.send', 'dots.close', 'dots.detail', 'dots.primary', 'dots.send', 'extension.reload', 'gemini.close', 'gemini.detail', 'gemini.file', 'gemini.list', 'gemini.send', 'grok.close', 'grok.detail', 'grok.file', 'grok.list', 'grok.send', 'perplexity.close', 'perplexity.detail', 'perplexity.send', 'chatgpt.input_abort', 'chatgpt.input_begin', 'chatgpt.input_chunk', 'chatgpt.send_images', ...['chatgpt', 'claudeai', 'grok', 'gemini', 'perplexity', 'copilot', 'dots'].map(site => site + '.session')].sort());
   assert.deepEqual(validate({ id: 8, op: 'grok.file', args: { file_id: 'r1_0', conversation_id: 'c1' } }).args, { file_id: 'r1_0', conversation_id: 'c1' });
   assert.deepEqual(validate({ id: 9, op: 'grok.send', args: { message: 'hi', conversation_id: '0e1d0000-0000-4000-8000-000000000001' } }).args.conversation_id, '0e1d0000-0000-4000-8000-000000000001');
   assert.deepEqual(validate({ id: 1, op: 'chatgpt.list', args: { count: 5 } }), { id: 1, op: 'chatgpt.list', args: { count: 5 } });
@@ -1364,6 +1364,40 @@ test('dots.send fails before the click when the dot record names another dot par
   routes[DOT_TBO] = jsonResponse({ id: other, messaging_room_id: DOT_ROOM, is_paused: false });
   await assert.rejects(hooks.ready(), (e) => e.code === 'endpoint_changed' && /another dot/.test(e.message));
   await assert.rejects(hooks.before(), (e) => e.code === 'endpoint_changed' && /another dot/.test(e.message));
+});
+
+const DOT_PRIMARY = 'https://chatgpt.com/backend-api/tbo/primary';
+const DOT_ROOT_THREAD = '0d0d0d0d-1111-7222-8333-00000000000f';
+
+function dotPrimary(over = {}) {
+  return {
+    selection: { thread_id: DOT_ROOT_THREAD, messaging_room_id: DOT_ROOM, available: true },
+    profile: { id: DOT_ID, display_name: 'Orbit', messaging_room_id: DOT_ROOM, active_root_thread_id: DOT_ROOT_THREAD, is_paused: false, ...over },
+  };
+}
+
+test('dots.primary names the account primary dot: its current thread, id and name', async () => {
+  const f = fakeFetch({ [SESSION]: jsonResponse({ accessToken: TOKEN }), [DOT_PRIMARY]: jsonResponse(dotPrimary()) });
+  const frames = await run(createRunner({ fetch: f }), 'dots.primary', {});
+  assert.deepEqual(frames, [{ ok: true, result: { thread: DOT_ROOT_THREAD, dot: DOT_ID, name: 'Orbit' } }]);
+  assert.equal(f.calls[1].init.headers.Authorization, 'Bearer ' + TOKEN);
+  assert.ok(!JSON.stringify(frames).includes(TOKEN));
+  assert.throws(() => validate({ id: 1, op: 'dots.primary', args: { id: DOT_THREAD } }));
+  const noName = fakeFetch({ [SESSION]: jsonResponse({ accessToken: TOKEN }), [DOT_PRIMARY]: jsonResponse(dotPrimary({ display_name: null })) });
+  assert.equal((await run(createRunner({ fetch: noName }), 'dots.primary', {}))[0].result.name, '');
+});
+
+test('dots.primary: no dot, a malformed thread or id, or no sign-in fail', async () => {
+  const broken = [{}, { profile: null }, dotPrimary({ active_root_thread_id: 'not/a/thread' }), dotPrimary({ active_root_thread_id: undefined }), dotPrimary({ id: 'home' }), dotPrimary({ id: undefined })];
+  for (const body of broken) {
+    const f = fakeFetch({ [SESSION]: jsonResponse({ accessToken: TOKEN }), [DOT_PRIMARY]: jsonResponse(body) });
+    await assert.rejects(run(createRunner({ fetch: f }), 'dots.primary', {}), (e) => e.code === 'endpoint_changed', JSON.stringify(body));
+  }
+  await assert.rejects(run(createRunner({ fetch: fakeFetch({ [SESSION]: jsonResponse({}) }) }), 'dots.primary', {}), (e) => e.code === 'not_logged_in');
+  // An account with no dot.
+  await assert.rejects(run(createRunner({ fetch: fakeFetch({ [SESSION]: jsonResponse({ accessToken: TOKEN }) }) }), 'dots.primary', {}), (e) => e.code === 'not_found');
+  const perms = fakePermissions(['https://claude.ai/*']);
+  await assert.rejects(run(createRunner({ fetch: fakeFetch({}), permissions: perms }), 'dots.primary', {}), (e) => e.code === 'permission_missing');
 });
 
 test('dots ops need the ChatGPT grant; dots.close goes to the sender for its own site', async () => {
