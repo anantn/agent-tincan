@@ -1221,6 +1221,7 @@ test('perplexity ops need the www.perplexity.ai grant', async () => {
 
 const DOT_THREAD = '0d0d0d0d-1111-7222-8333-000000000001';
 const DOT_ROOM = '0123456789abcdef0123456789abcdef';
+const DOT_ID = '0a0a0a0a-1111-4222-8333-000000000002~0123456789abcdef0123456789abcdef';
 const DOT_OWNER = 'user-owner__acct';
 const DOT_BOT = 'user-dot__acct';
 const DOT_TBO = `https://chatgpt.com/backend-api/tbo/by-thread/${DOT_THREAD}`;
@@ -1234,7 +1235,7 @@ function dotMessage(id, from, text, at, extra = {}) {
 function dotRoutes(over = {}) {
   return {
     [SESSION]: jsonResponse({ accessToken: TOKEN }),
-    [DOT_TBO]: jsonResponse({ id: 'tbo-1', messaging_room_id: DOT_ROOM, is_paused: false, status: 'active', last_check_in_at: '2026-09-29T17:00:00Z' }),
+    [DOT_TBO]: jsonResponse({ id: DOT_ID, messaging_room_id: DOT_ROOM, is_paused: false, status: 'active', last_check_in_at: '2026-09-29T17:00:00Z' }),
     [DOT_ROOM_URL]: jsonResponse({ id: DOT_ROOM, type: 'DM', creator_account_user_id: DOT_OWNER, members: [{ account_user_id: DOT_OWNER, role: 'user' }, { account_user_id: DOT_BOT, role: 'user' }] }),
     [DOT_FEED]: jsonResponse({
       items: [
@@ -1319,7 +1320,7 @@ test('dots.detail caches the dot record and room per thread; not_found clears th
 test('dots.send refuses a paused dot, or a send with no thread, before any tab opens', async () => {
   const sent = [];
   const sender = { send: async (site, a) => (sent.push([site, a]), { conversation_id: DOT_THREAD, url: '', submitted_at: 1 }), close: async () => ({ closed: 0 }) };
-  const paused = fakeFetch(dotRoutes({ [DOT_TBO]: jsonResponse({ id: 'tbo-1', messaging_room_id: DOT_ROOM, is_paused: true, status: 'paused' }) }));
+  const paused = fakeFetch(dotRoutes({ [DOT_TBO]: jsonResponse({ id: DOT_ID, messaging_room_id: DOT_ROOM, is_paused: true, status: 'paused' }) }));
   let caught;
   await assert.rejects(run(createRunner({ fetch: paused, sender }), 'dots.send', { message: 'hi', conversation_id: DOT_THREAD }), (e) => ((caught = e), e.code === 'paused'));
   assert.match(errorFrame(caught).error.message, /paused/);
@@ -1332,6 +1333,37 @@ test('dots.send refuses a paused dot, or a send with no thread, before any tab o
   assert.equal(f.calls.length, 0, 'a send with no thread fetches nothing');
   // Without a sender the send is unsupported.
   await assert.rejects(run(createRunner({ fetch: fakeFetch(dotRoutes()) }), 'dots.send', { message: 'hi', conversation_id: DOT_THREAD }), (e) => e.code === 'unsupported');
+});
+
+test('dots.send hands the sender the dot id as the page to open, and refuses a dot record without a well-formed one', async () => {
+  let got;
+  const sender = { send: async (site, a, hooks) => ((got = { site, a, hooks }), { conversation_id: DOT_THREAD, url: '', submitted_at: 1 }), close: async () => ({ closed: 0 }) };
+  await run(createRunner({ fetch: fakeFetch(dotRoutes()), sender }), 'dots.send', { message: 'hi', conversation_id: DOT_THREAD });
+  assert.equal(got.site, 'dots');
+  assert.equal(got.hooks.page, DOT_ID);
+  for (const id of [undefined, '', 'home', 'tbo-1', `${DOT_ID}~extra`, '~0123456789abcdef', '../x~y']) {
+    got = undefined;
+    const rec = { messaging_room_id: DOT_ROOM, is_paused: false, ...(id === undefined ? {} : { id }) };
+    const f = fakeFetch(dotRoutes({ [DOT_TBO]: jsonResponse(rec) }));
+    await assert.rejects(run(createRunner({ fetch: f, sender }), 'dots.send', { message: 'hi', conversation_id: DOT_THREAD }), (e) => e.code === 'endpoint_changed', String(id));
+    assert.equal(got, undefined, 'no send reached the sender');
+    // A read of the same record still works: only the send needs the id.
+    assert.equal((await run(createRunner({ fetch: fakeFetch(dotRoutes({ [DOT_TBO]: jsonResponse(rec) })) }), 'dots.detail', { id: DOT_THREAD }))[0].ok, true, String(id));
+  }
+});
+
+test('dots.send fails before the click when the dot record names another dot partway through', async () => {
+  let hooks;
+  const sender = { send: async (_site, _a, h) => ((hooks = h), { conversation_id: DOT_THREAD, url: '', submitted_at: 1 }), close: async () => ({ closed: 0 }) };
+  const routes = dotRoutes();
+  routes[`${DOT_ROOM_URL}/messages?limit=20`] = routes[DOT_FEED];
+  await run(createRunner({ fetch: fakeFetch(routes), sender }), 'dots.send', { message: 'hi', conversation_id: DOT_THREAD });
+  await hooks.ready();
+  await hooks.before();
+  const other = '0a0a0a0a-1111-4222-8333-000000000003~fedcba9876543210fedcba9876543210';
+  routes[DOT_TBO] = jsonResponse({ id: other, messaging_room_id: DOT_ROOM, is_paused: false });
+  await assert.rejects(hooks.ready(), (e) => e.code === 'endpoint_changed' && /another dot/.test(e.message));
+  await assert.rejects(hooks.before(), (e) => e.code === 'endpoint_changed' && /another dot/.test(e.message));
 });
 
 test('dots ops need the ChatGPT grant; dots.close goes to the sender for its own site', async () => {
