@@ -890,7 +890,12 @@ export function createSender({
       }
       // A feed-confirmed site's ready hook runs its last checks (a dot
       // paused while this send waited) before anything is typed.
-      if (feed && typeof hooks.ready === 'function') await hooks.ready();
+      if (feed && typeof hooks.ready === 'function') {
+        await hooks.ready();
+        // ready reads the backend, so the page may have moved meanwhile:
+        // check its address again before anything is typed.
+        if ((await urlId()) !== pageId) throw new OpError('not_found', 'conversation not found');
+      }
       if (images) {
         inputActive();
         // Mark possible exposure before injection, since a lost injection
