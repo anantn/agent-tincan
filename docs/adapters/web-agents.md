@@ -273,7 +273,7 @@ A dot acts on its own in the apps you connected to it (Gmail, GitHub, Google Dri
    tincan web install --site dots
    ```
 
-   and start it with the command it prints. `--thread` is required for `--site dots` and refused for every other site. Logs go to `~/Library/Logs/tincan-dot-web.log`.
+   and start it with the command it prints. `web serve --site dots` requires `--thread`, which the installed service passes; `web install --site dots` finds it when you leave it off. Every other site refuses `--thread`. Logs go to `~/Library/Logs/tincan-dot-web.log`.
 
 Sign in to chatgpt.com in the same Chrome first. The extension needs a build with the `dots.*` operations.
 
