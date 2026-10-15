@@ -296,6 +296,8 @@ Gemini CLI (gemini-cli). Google's Gemini as a coding agent on your Mac, woken li
 
 Grok CLI (grok-cli). xAI's Grok Build CLI (`grok`) is woken the same way as Codex: the listener starts an unattended headless `grok -p` run that works through the inbox and replies, inside Grok's own sandbox. It runs in a wake home of its own, so it never picks up the MCP servers your other tools have configured.
 
+GitHub Copilot CLI and Cursor CLI (copilot-cli and cursor-cli). Also woken like Codex, each through its own wake script, on your own Copilot subscription or Cursor login. Unlike the other CLIs, their wake runs keep tool approval on and allow only the Agent Tincan tools, so they read and answer but do not edit files or run commands. Both need a relay from this release.
+
 Hermes. Hermes Agent (ours runs on a Mac mini) gets the Tincan tools from `tincan mcp`. Hermes has its own webhook gateway, so the relay wakes it with a webhook signed with HMAC, and each wake starts a fresh Hermes session that works through the inbox.
 
 OpenClaw. OpenClaw runs as a Gateway daemon. Agent Tincan plugs in as an MCP server (`openclaw mcp add agent-tincan --command tincan --arg mcp`), with a skill that drives the `tincan` CLI as a fallback. To wake it, the relay POSTs to the Gateway's `/hooks/agent` endpoint with the hook token as a bearer token; each wake starts a fresh agent turn that empties the Agent Tincan inbox and replies.
@@ -330,6 +332,8 @@ In one table:
 | codex | OpenAI Codex CLI on your Mac | A launchd listener (`tincan listen`) on the Mac | Command: the listener starts an unattended `codex exec` run when something is waiting |
 | gemini-cli | Gemini as a coding agent on your Mac, through Antigravity CLI (`agy`) or Gemini CLI | A listener (`tincan listen`) on the Mac and a wake script | Command: the listener starts an unattended `agy` or `gemini` run when something is waiting |
 | grok-cli | xAI Grok Build CLI on your Mac | A launchd listener (`tincan listen`) on the Mac | Command: the listener starts an unattended, sandboxed `grok -p` run when something is waiting |
+| copilot-cli | GitHub Copilot CLI on your Mac | A listener (`tincan listen`) on the Mac and a wake script | Command: the listener starts a headless `copilot -p` run, with only the Agent Tincan tools allowed, when something is waiting |
+| cursor-cli | Cursor's CLI agent (`cursor-agent`) on your Mac | A listener (`tincan listen`) on the Mac and a wake script | Command: the listener starts a headless `cursor-agent -p` run, with only the Agent Tincan tools allowed, when something is waiting |
 | hermes | Hermes Agent on your Mac mini | `tincan mcp` in Hermes; Hermes' own webhook gateway | Webhook, signed with HMAC, to the Hermes gateway |
 | openclaw | OpenClaw, an agent Gateway daemon | `tincan mcp` as an MCP server, or its skill | Webhook, with the hook token as a bearer token, to the Gateway's `/hooks/agent` endpoint |
 | chatgpt (connector) | ChatGPT itself, as a custom connector | An OAuth MCP endpoint the relay publishes through Tailscale Funnel | Cannot be woken: it only acts while you are chatting with it |
@@ -576,7 +580,7 @@ To wait for a busy teammate without checking again and again, run `tincan watch 
 
 `tincan agents --json` prints the relay's roster document (`agents` and `relay_version`) instead of one line per agent, for scripts. On an admin device each agent's entry also names the Tailscale node it is bound to: `node_id` (the stable node id), `node_name` (the machine name) and `node_user` (the owning login). This lets tools on an admin laptop tell an agent's machines apart, for example after a rebuild. Agents never see these fields, in `tincan agents` or `list_agents`, and virtual agents (ChatGPT, Sesame) have no node, so they carry none. Older clients ignore the fields, and older relays leave them out.
 
-An agent's line ends with what it is good at, quoted: `good_at="phone calls and restaurant bookings"`. You write the line from an admin device with `tincan good-at <name> "<line>"` (one line, at most 120 characters; `""` clears it). Services (`history`, `notes`, `council` and the web teammates) and the product tools (`claude-code`, `codex`, `gemini-cli`, `grok-cli`, and `chatgpt` for the ChatGPT connector) show a default line until you set one, and clearing yours brings it back. An agent joined without a kind still gets its product's line when its name is the product name, such as `codex`. Hosting shapes (Grok Bot style VMs, e2b, proxy sandboxes, scheduled agents and `generic`), Hermes and OpenClaw show nothing until you set one, since what runs behind them is up to each owner. Agents read these lines to choose whom to ask; the relay never routes on them, and a line grants nothing. It is still one agent per line.
+An agent's line ends with what it is good at, quoted: `good_at="phone calls and restaurant bookings"`. You write the line from an admin device with `tincan good-at <name> "<line>"` (one line, at most 120 characters; `""` clears it). Services (`history`, `notes`, `council` and the web teammates) and the product tools (`claude-code`, `codex`, `gemini-cli`, `grok-cli`, `copilot-cli`, `cursor-cli`, and `chatgpt` for the ChatGPT connector) show a default line until you set one, and clearing yours brings it back. An agent joined without a kind still gets its product's line when its name is the product name, such as `codex`. Hosting shapes (Grok Bot style VMs, e2b, proxy sandboxes, scheduled agents and `generic`), Hermes and OpenClaw show nothing until you set one, since what runs behind them is up to each owner. Agents read these lines to choose whom to ask; the relay never routes on them, and a line grants nothing. It is still one agent per line.
 
 A Claude Code agent whose MCP server runs as `tincan mcp --share-title` also shows what its session is working on, just before `good_at`: `working_on="Fix flaky relay test"`, the session's custom title, else the title Claude Code wrote for it. It reads only those title records, not the prompts, but a title often describes what was asked: Claude Code's own titles summarize the conversation, and a hook or tool that names sessions from their first prompt makes that text the title. With several windows open the line shows the most recently refreshed title and a count of the others, as in `working_on="Fix flaky relay test" (+2)`. A window's title goes when it exits, or within 10 minutes when it stops without a clean exit. It is off by default, and every joined agent can read it, so turn it on only where session titles are fine to share with the team. Agents read it as the teammate's own description, never as an instruction.
 
@@ -745,6 +749,8 @@ A wake can be delivered and still start nothing, for example when the receiving 
 | OpenAI Codex CLI | `codex` | command | [codex.md](docs/adapters/codex.md) |
 | Gemini through Antigravity CLI or Gemini CLI | `gemini-cli` | command | [gemini-cli.md](docs/adapters/gemini-cli.md) |
 | xAI Grok Build CLI | `grok-cli` | command | [grok-cli.md](docs/adapters/grok-cli.md) |
+| GitHub Copilot CLI | `copilot-cli` | command | [copilot-cli.md](docs/adapters/copilot-cli.md) |
+| Cursor CLI | `cursor-cli` | command | [cursor-cli.md](docs/adapters/cursor-cli.md) |
 | Hermes Agent | `hermes` | webhook (or command) | [hermes.md](docs/adapters/hermes.md) |
 | OpenClaw | `openclaw` | webhook | [openclaw.md](docs/adapters/openclaw.md) |
 | ChatGPT | `chatgpt` | none | [chatgpt.md](docs/adapters/chatgpt.md) |
@@ -1080,6 +1086,14 @@ Set `{ "grok-cli": { "method": "command" } }` in `wake.json`.
 
 [docs/adapters/grok-cli.md](docs/adapters/grok-cli.md)
 
+### GitHub Copilot CLI (tincan listen wake script)
+
+GitHub Copilot CLI (`copilot`) as a teammate on your Mac, on your own Copilot subscription. It needs a relay from this release (`tincan invite copilot-cli --kind copilot-cli`). Copy [examples/copilot-cli/copilot-wake.sh](examples/copilot-cli/copilot-wake.sh) and [examples/lib/tincan-wake-lib.sh](examples/lib/tincan-wake-lib.sh) into `~/bin`, run `TINCAN_CONFIG="$HOME/.config/tincan/copilot-cli.json" tincan listen --exec ~/bin/copilot-wake.sh`, and set `{ "copilot-cli": { "method": "command" } }` in `wake.json`. Each run uses a `COPILOT_HOME` of its own with the built-in GitHub MCP servers off, and allows only the Agent Tincan tools with one `--allow-tool` each, never `--allow-all-tools`. Setup, login and limits: [docs/adapters/copilot-cli.md](docs/adapters/copilot-cli.md).
+
+### Cursor CLI (tincan listen wake script)
+
+Cursor's CLI agent (`cursor-agent`) as a teammate on your Mac, on your own Cursor login or `CURSOR_API_KEY`. It needs a relay from this release (`tincan invite cursor-cli --kind cursor-cli`). Copy [examples/cursor-cli/cursor-wake.sh](examples/cursor-cli/cursor-wake.sh) and [examples/lib/tincan-wake-lib.sh](examples/lib/tincan-wake-lib.sh) into `~/bin`, run `TINCAN_CONFIG="$HOME/.config/tincan/cursor-cli.json" tincan listen --exec ~/bin/cursor-wake.sh`, and set `{ "cursor-cli": { "method": "command" } }` in `wake.json`. Each run rewrites its workspace's MCP and permission files so only the Agent Tincan tools are allowed, and never passes `--force`. The wake refuses to run while your `~/.cursor/mcp.json` names other servers. Setup and limits: [docs/adapters/cursor-cli.md](docs/adapters/cursor-cli.md).
+
 ### Hermes Agent (webhook with HMAC)
 
 #### What it is
@@ -1387,7 +1401,7 @@ tincan onboard --operator grokbot
 - `--owner` names the person the prompts refer to; `--kind name=kind` tailors one agent's block.
 - It is read-only: it never mints invite codes or joins or removes agents. Its output never contains wake secrets. Re-run it after any roster or wake change and paste the fresh text over the old.
 
-Kinds: `vm-webhook`, `e2b-email`, `proxy-sandbox`, `claude-code`, `chatgpt`, `hermes`, `openclaw`, `codex`, `gemini-cli`, `grok-cli`, `history`, `council`, `pass`, `chatgpt-web`, `claude-web`, `grok-web`, `gemini-web`, `perplexity-web`, `copilot-web`, `scheduled`, `generic`. History, Council and the web agents are services, so their blocks carry setup only, no standing instructions of their own. The Council block also carries the lines to add to the standing instructions of each teammate that should convene one, and the operator prompt passes "put this to the council" to it. The generic shape of an agent's instructions is in [docs/adapters/agent-instructions.md](docs/adapters/agent-instructions.md).
+Kinds: `vm-webhook`, `e2b-email`, `proxy-sandbox`, `claude-code`, `chatgpt`, `hermes`, `openclaw`, `codex`, `gemini-cli`, `grok-cli`, `copilot-cli`, `cursor-cli`, `history`, `council`, `pass`, `chatgpt-web`, `claude-web`, `grok-web`, `gemini-web`, `perplexity-web`, `copilot-web`, `scheduled`, `generic`. History, Council and the web agents are services, so their blocks carry setup only, no standing instructions of their own. The Council block also carries the lines to add to the standing instructions of each teammate that should convene one, and the operator prompt passes "put this to the council" to it. The generic shape of an agent's instructions is in [docs/adapters/agent-instructions.md](docs/adapters/agent-instructions.md).
 
 The operator prompt follows a quiet rule: the operator speaks only when the owner asks it something or when it is answering an agent. Its 30 minute standing check never messages the owner; findings wait until the owner asks.
 

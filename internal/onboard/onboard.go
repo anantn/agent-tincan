@@ -35,6 +35,8 @@ const (
 	KindCodex         = "codex"
 	KindGeminiCLI     = "gemini-cli"
 	KindGrokCLI       = "grok-cli"
+	KindCopilotCLI    = "copilot-cli"
+	KindCursorCLI     = "cursor-cli"
 	KindHistory       = "history"
 	KindNotes         = "notes"
 	KindCouncil       = "council"
@@ -54,7 +56,7 @@ const (
 )
 
 // Kinds lists every agent kind in recipe order.
-var Kinds = []string{KindVMWebhook, KindE2BEmail, KindProxySandbox, KindClaudeCode, KindChatGPT, KindSesame, KindHermes, KindOpenClaw, KindCodex, KindGeminiCLI, KindGrokCLI, KindHistory, KindNotes, KindCouncil, KindPass, KindChatGPTWeb, KindClaudeWeb, KindGrokWeb, KindGeminiWeb, KindPerplexityWeb, KindCopilotWeb, KindDotWeb, KindPhone, KindScheduled, KindGeneric}
+var Kinds = []string{KindVMWebhook, KindE2BEmail, KindProxySandbox, KindClaudeCode, KindChatGPT, KindSesame, KindHermes, KindOpenClaw, KindCodex, KindGeminiCLI, KindGrokCLI, KindCopilotCLI, KindCursorCLI, KindHistory, KindNotes, KindCouncil, KindPass, KindChatGPTWeb, KindClaudeWeb, KindGrokWeb, KindGeminiWeb, KindPerplexityWeb, KindCopilotWeb, KindDotWeb, KindPhone, KindScheduled, KindGeneric}
 
 // KnownKind reports whether kind is empty (no kind) or one of Kinds.
 func KnownKind(kind string) bool { return kind == "" || slices.Contains(Kinds, kind) }
@@ -82,6 +84,8 @@ var runtimeNames = map[string]string{
 	"codex":          KindCodex,
 	"gemini-cli":     KindGeminiCLI,
 	"grok-cli":       KindGrokCLI,
+	"copilot-cli":    KindCopilotCLI,
+	"cursor-cli":     KindCursorCLI,
 	"history":        KindHistory,
 	"notes":          KindNotes,
 	"council":        KindCouncil,
@@ -109,6 +113,8 @@ var defaultWake = map[string]string{
 	KindCodex:         "command",
 	KindGeminiCLI:     "command",
 	KindGrokCLI:       "command",
+	KindCopilotCLI:    "command",
+	KindCursorCLI:     "command",
 	KindHistory:       "wait",
 	KindNotes:         "wait",
 	KindCouncil:       "wait",
@@ -144,6 +150,8 @@ var stockGoodAt = map[string]string{
 	KindCodex:         "OpenAI Codex run unattended on the owner's machine: reads code anywhere, edits and runs it in its own work folder",
 	KindGeminiCLI:     "a Gemini coding agent run unattended on the owner's machine: reads, edits and runs code",
 	KindGrokCLI:       "xAI's Grok Build CLI run unattended on the owner's machine: reads code, edits and runs it in its own work folder",
+	KindCopilotCLI:    "GitHub Copilot CLI run unattended on the owner's machine: reads code in its own work folder; no file edits or commands",
+	KindCursorCLI:     "Cursor's CLI agent run unattended on the owner's machine: reads code in its work folder; only Tincan tools pre-approved",
 	KindChatGPT:       "ChatGPT in the owner's ChatGPT app; acts only while the owner is chatting with it, so it cannot pick up asks later",
 	KindSesame:        "the owner's Sesame agent in Sesame's cloud; picks up asks when its Sesame schedule checks the inbox, not at once",
 	KindPhone:         "the owner's phone; asks only, never answers",
@@ -175,11 +183,13 @@ var wakeMethodOrder = []string{"webhook", "email", "wait", "channel", "command",
 // carry a per-agent TINCAN_CONFIG and their rejoin names the agent. A new
 // command-woken CLI kind is added here, not to template conditions.
 var freshSession = map[string]bool{
-	KindHermes:    true,
-	KindOpenClaw:  true,
-	KindCodex:     true,
-	KindGeminiCLI: true,
-	KindGrokCLI:   true,
+	KindHermes:     true,
+	KindOpenClaw:   true,
+	KindCodex:      true,
+	KindGeminiCLI:  true,
+	KindGrokCLI:    true,
+	KindCopilotCLI: true,
+	KindCursorCLI:  true,
 }
 
 // Member is one roster entry as the relay reports it.
