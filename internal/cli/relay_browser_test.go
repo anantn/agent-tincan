@@ -135,14 +135,23 @@ func TestRelayProcessGatewayAgentUnaffectedByHardening(t *testing.T) {
 	if testing.Short() {
 		t.Skip("starts a relay process")
 	}
-	free, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	// The gateway's port is picked free here and bound by the relay process,
+	// so another process can take it in between: retry on a fresh port.
+	var p *relayProcess
+	var gwURL string
+	for try := 0; p == nil; try++ {
+		free, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		gwAddr := free.Addr().String()
+		free.Close()
+		gwURL = "http://" + gwAddr
+		p, err = tryRelayProcessIn(t, relayStateDir(t), "--chatgpt-gateway", "--gateway-listen", gwAddr, "--gateway-url", gwURL)
+		if err != nil && (try == 2 || !strings.Contains(err.Error(), "address already in use")) {
+			t.Fatal(err)
+		}
 	}
-	gwAddr := free.Addr().String()
-	free.Close()
-	gwURL := "http://" + gwAddr
-	p := startRelayProcessIn(t, relayStateDir(t), "--chatgpt-gateway", "--gateway-listen", gwAddr, "--gateway-url", gwURL)
 	useConfig(t, client.Config{})
 	worker := p.agent(t, "worker")
 

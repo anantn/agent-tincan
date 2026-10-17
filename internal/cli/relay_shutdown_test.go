@@ -134,6 +134,17 @@ func startRelayProcess(t *testing.T) *relayProcess {
 // the state of an earlier relay, with any extra relay flags.
 func startRelayProcessIn(t *testing.T, dir string, extra ...string) *relayProcess {
 	t.Helper()
+	p, err := tryRelayProcessIn(t, dir, extra...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// tryRelayProcessIn is startRelayProcessIn returning the failure, so a
+// caller can retry a relay that exited at startup.
+func tryRelayProcessIn(t *testing.T, dir string, extra ...string) (*relayProcess, error) {
+	t.Helper()
 	t.Setenv("TINCAN_CONFIG", filepath.Join(t.TempDir(), "config.json"))
 	os.Remove(filepath.Join(dir, "url"))
 	p := &relayProcess{dir: dir, out: &lockedBuffer{}, done: make(chan error, 1)}
@@ -151,15 +162,21 @@ func startRelayProcessIn(t *testing.T, dir string, extra ...string) *relayProces
 	})
 	deadline := time.Now().Add(30 * time.Second)
 	for p.url == "" || p.get("/v1/hello") != nil {
+		select {
+		case err := <-p.done:
+			p.done <- err // for cleanup
+			return nil, fmt.Errorf("relay exited at startup (%v):\n%s", err, p.out)
+		default:
+		}
 		if time.Now().After(deadline) {
-			t.Fatalf("relay did not start:\n%s", p.out)
+			return nil, fmt.Errorf("relay did not start:\n%s", p.out)
 		}
 		time.Sleep(20 * time.Millisecond)
 		if raw, err := os.ReadFile(filepath.Join(dir, "url")); err == nil {
 			p.url = string(raw)
 		}
 	}
-	return p
+	return p, nil
 }
 
 func (p *relayProcess) get(path string) error {
