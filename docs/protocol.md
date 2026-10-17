@@ -492,8 +492,9 @@ at two points only:
   `{"outcome": "requeued", "until": "<RFC 3339>"}`.
 
 An ask never moves when it is to or from `dot-web`, from a `council`, was ever
-held for approval, is a `notify` or `ping`, is in a group, carries attachments,
-starts with a `conversation:` line, has a clarification exchange or was resumed,
+held for approval, is a `notify` or `ping`, is in a group, came from a room
+mention, carries attachments, starts with a `conversation:` line, has a
+clarification exchange or was resumed,
 or was ever claimed and then requeued (it may have been typed into a site), or
 when its target is not a web chat agent. Such an ask is delivered as before, and
 its handback gets 409.

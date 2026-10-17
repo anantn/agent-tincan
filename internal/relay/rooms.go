@@ -38,7 +38,7 @@ var roomNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 // unapproved text, or hand what they retrieve to every member.
 var (
 	roomHeldKinds    = map[string]bool{onboard.KindCouncil: true, onboard.KindDotWeb: true}
-	roomServiceKinds = map[string]bool{onboard.KindHistory: true, onboard.KindNotes: true, "pass": true}
+	roomServiceKinds = map[string]bool{onboard.KindHistory: true, onboard.KindNotes: true, onboard.KindPass: true}
 )
 
 // roomVendor reports whether member a sends the thread on to an outside

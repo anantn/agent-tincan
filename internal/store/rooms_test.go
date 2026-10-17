@@ -133,6 +133,38 @@ func TestRoomsMigrateOnExistingDatabase(t *testing.T) {
 	}
 }
 
+// A database from before failover, push alerts and rooms gains all three
+// on open, in one pass, keeping its requests, and a mention ask stored
+// afterwards carries its room post next to the failover columns.
+func TestFailoverPushAndRoomsMigrateTogether(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "relay.db")
+	s, _ := open(t, path)
+	ctx := context.Background()
+	req := ask(t, s, "codex", "claude-web", "before the upgrade")
+	if _, err := s.DB().Exec(`DROP TABLE room_posts; DROP TABLE room_members; DROP TABLE rooms; DROP TABLE push_subscriptions;
+		DROP INDEX requests_room_post; ALTER TABLE requests DROP COLUMN room_post_id;
+		ALTER TABLE requests DROP COLUMN moved_from; ALTER TABLE requests DROP COLUMN deliver_after; ALTER TABLE requests DROP COLUMN claim_lapsed;`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	for i := range 2 {
+		s, _ = open(t, path)
+		if got, _, err := s.Request(ctx, req.ID); err != nil || got.Body != "before the upgrade" || got.RoomPostID != 0 || len(got.MovedFrom) != 0 {
+			t.Fatalf("request = %+v %v", got, err)
+		}
+		if lapsed, err := s.ClaimLapsed(ctx, req.ID); err != nil || lapsed {
+			t.Fatalf("claim_lapsed = %v %v", lapsed, err)
+		}
+		if i == 0 {
+			post, mreq := mention(t, s)
+			if got, _, err := s.Request(ctx, mreq.ID); err != nil || got.RoomPostID != post.ID {
+				t.Fatalf("mention = %+v %v", got, err)
+			}
+		}
+		s.Close()
+	}
+}
+
 // mention queues codex's post in launch as an ask to claude-code, as the
 // relay does for an @mention, and claims it.
 func mention(t *testing.T, s *Store) (envelope.RoomPost, envelope.Request) {
