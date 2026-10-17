@@ -68,10 +68,20 @@ func ClampWait(d time.Duration) time.Duration { return min(max(d, 0), MaxInlineW
 
 // AgentInfo is one joined agent as the relay reports it.
 type AgentInfo struct {
-	UpgradeAvailable string    `json:"upgrade_available,omitempty"`
-	Name             string    `json:"name"`
-	Online           bool      `json:"online"`
-	LastPoll         time.Time `json:"last_poll,omitzero"` // last long-poll since the relay started
+	UpgradeAvailable string `json:"upgrade_available,omitempty"`
+	Name             string `json:"name"`
+	Online           bool   `json:"online"`
+	// Status is the relay's one word for what the agent is doing (StatusBusy,
+	// StatusIdle, StatusStuck or StatusOffline), computed once on the relay
+	// so every surface shows the same thing. StatusReason says why a stuck
+	// agent is stuck ("claim lapsed"); BusyFor names the asker whose request
+	// a busy agent holds and BusySince when it claimed it. They never carry
+	// request text. All are empty from relays that predate them.
+	Status       string    `json:"status,omitempty"`
+	StatusReason string    `json:"status_reason,omitempty"`
+	BusyFor      string    `json:"busy_for,omitempty"`
+	BusySince    time.Time `json:"busy_since,omitzero"`
+	LastPoll     time.Time `json:"last_poll,omitzero"` // last long-poll since the relay started
 	// LastActive is the agent's last call of any kind (send, reply, get,
 	// poll), kept across relay restarts.
 	LastActive time.Time `json:"last_active,omitzero"`
@@ -110,6 +120,17 @@ type AgentInfo struct {
 	// at the top level of each roster entry.
 	envelope.Target
 }
+
+// The statuses a relay reports in AgentInfo.Status. Busy means the agent
+// holds live claimed work or its host says it is working; stuck means work
+// waits on it and nothing is moving; idle and offline split the rest by
+// whether it is polling now.
+const (
+	StatusBusy    = "busy"
+	StatusIdle    = "idle"
+	StatusStuck   = "stuck"
+	StatusOffline = "offline"
+)
 
 // Roster is the relay's agent list with what the relay says about itself.
 type Roster struct {
@@ -623,6 +644,39 @@ func (r *Relay) SetGoodAt(ctx context.Context, name, line string) (string, error
 	}
 	err := r.call(ctx, r.api, "PUT", "/v1/agents/"+url.PathEscape(name)+"/good-at", map[string]string{"good_at": line}, &out)
 	return out.GoodAt, err
+}
+
+// ErrWatchesUnsupported identifies a relay that predates idle watches.
+var ErrWatchesUnsupported = errors.New("relay does not support idle watches; upgrade the relay")
+
+// WatchResult is the relay's answer to a watch: the agent watched and when
+// the watch lapses if that agent is not idle by then.
+type WatchResult struct {
+	Agent     string    `json:"agent"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// Text is what tincan watch and the watch tool print for w, the same on
+// both: who is watched and when the watch lapses, on the local clock.
+func (w WatchResult) Text(now time.Time) string {
+	return fmt.Sprintf("You will get one relay notice when %s is next idle (or offline with nothing in progress). The watch lapses at %s if that has not happened.", w.Agent, clockTime(w.ExpiresAt, now))
+}
+
+// Watch asks the relay to send this agent one notice when agent is next
+// idle (or offline with nothing in progress). Asking again while a watch is
+// pending returns that watch. It checks the relay's capabilities first, so
+// an older relay is refused with ErrWatchesUnsupported.
+func (r *Relay) Watch(ctx context.Context, agent string) (WatchResult, error) {
+	caps, err := r.Capabilities(ctx)
+	if err != nil {
+		return WatchResult{}, fmt.Errorf("check relay capabilities: %w", err)
+	}
+	if !caps.Watches {
+		return WatchResult{}, ErrWatchesUnsupported
+	}
+	var out WatchResult
+	err = r.call(ctx, r.api, "POST", "/v1/watches", map[string]string{"agent": agent}, &out)
+	return out, err
 }
 
 // Remove unbinds an agent (admin devices only).

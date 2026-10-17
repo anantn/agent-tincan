@@ -46,6 +46,10 @@ starts a turn. Each teammate request starts one turn on the machine,
 however many windows are open, and a reply to an ask goes to the window
 that asked. --wake-socket=false turns this off.
 
+Inside a Claude Code session it also tells the relay whether the session
+is busy or idle (Claude Code's own session state, not its conversation),
+so the roster shows the agent busy while you are chatting with it.
+
 With --share-title, inside a Claude Code session it also shows the
 session's title (its custom title, else the title Claude Code wrote for
 it) as a working_on field on the roster, refreshed every few minutes and
@@ -70,6 +74,23 @@ default.`,
 				// id per process gives each session the replies to its own
 				// asks. One-shot CLI commands name no session and see all.
 				r.SetSession(newSession())
+			}
+			// Inside a Claude Code session, the session's own idle or
+			// busy state shows on the roster. Elsewhere the parent has no
+			// registry file, so no goroutine is started to poll for one.
+			if _, err := os.Stat(claudeRegistryPath(os.Getenv, os.Getppid())); err == nil {
+				// Wait for it on the way out, so its not-busy report is sent
+				// before the process exits.
+				ctx, cancel := context.WithCancel(runCtx)
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					startHostStatus(ctx, newClaudeHostStatus(r, os.Getenv, os.Getppid()))
+				}()
+				defer func() {
+					cancel()
+					<-done
+				}()
 			}
 			if shareTitle {
 				stop := startTitleSharing(runCtx, newClaudeTitleSharer(r, os.Getenv, os.Getppid()), sessionKeepalive)

@@ -120,7 +120,7 @@ func setRelay(cfg *client.Config, url string) {
 }
 
 func agentCmds() []*cobra.Command {
-	return []*cobra.Command{heldCmd(), approvalCmd("approve"), approvalCmd("deny"), joinCmd(), inviteCmd(), kindCmd(), goodAtCmd(), removeCmd(), agentsCmd(), askCmd(), getCmd(), inboxCmd(), progressCmd(), replyCmd(), answerCmd(), cancelCmd(), waitCmd()}
+	return []*cobra.Command{heldCmd(), approvalCmd("approve"), approvalCmd("deny"), joinCmd(), inviteCmd(), kindCmd(), goodAtCmd(), removeCmd(), agentsCmd(), askCmd(), getCmd(), inboxCmd(), progressCmd(), replyCmd(), answerCmd(), cancelCmd(), waitCmd(), watchCmd()}
 }
 
 func joinCmd() *cobra.Command {
@@ -374,7 +374,11 @@ func formatRoster(ro client.Roster, now time.Time) string {
 func formatAgents(agents []client.AgentInfo, now time.Time) string {
 	var b strings.Builder
 	for _, a := range agents {
-		fmt.Fprintf(&b, "%-14s %-8s wake=%s %s", a.Name, a.State(), a.WakeLabel(), a.LastSeen(now))
+		fmt.Fprintf(&b, "%-14s %-8s", a.Name, a.State())
+		if status := a.StatusField(now); status != "" {
+			fmt.Fprintf(&b, " %s", status)
+		}
+		fmt.Fprintf(&b, " wake=%s %s", a.WakeLabel(), a.LastSeen(now))
 		if overdue := a.OverdueNote(now); overdue != "" {
 			fmt.Fprintf(&b, " %s", overdue)
 		}
@@ -796,6 +800,29 @@ func cancelCmd() *cobra.Command {
 				return err
 			}
 			cmd.Printf("Cancelled %s.\n", args[0])
+			return nil
+		},
+	}
+}
+
+// watchCmd asks the relay for one notice when a teammate is next idle,
+// delivered to this agent's inbox like any relay notice.
+func watchCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "watch <agent>",
+		Short: "Get one notice in your inbox when a teammate is next idle (lapses after 24h)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			r, _, err := connect()
+			if err != nil {
+				return err
+			}
+			defer printHeld(cmd, r)
+			res, err := r.Watch(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			cmd.Println(res.Text(time.Now()))
 			return nil
 		},
 	}

@@ -78,7 +78,7 @@ func (c *Config) defaults() {
 		c.DeliveryLease = 2 * time.Minute
 	}
 	if c.ClaimLease == 0 {
-		c.ClaimLease = 30 * time.Minute
+		c.ClaimLease = DefaultClaimLease
 	}
 	if c.UrgentClaimLease == 0 {
 		c.UrgentClaimLease = DefaultUrgentClaimLease
@@ -106,6 +106,11 @@ func (c *Config) defaults() {
 	}
 	c.Attachments.defaults()
 }
+
+// DefaultClaimLease is how long a claim lasts without a reply or progress
+// note before the request is requeued. It is also how long after a start
+// the relay waits before it calls any agent stuck.
+const DefaultClaimLease = 30 * time.Minute
 
 // DefaultUrgentClaimLease is how long a claim on an urgent request lasts
 // without a reply or progress note before the request is requeued (and its
@@ -197,6 +202,10 @@ type Server struct {
 	// --share-title), by session, lapsing after SessionGrace without a
 	// refresh. In memory only; see handleWorkingOn.
 	workingOn map[string]map[string]workingOnEntry
+	// hostStatus is whether each agent's sessions' hosts say they are
+	// working, by session, lapsing after SessionGrace without a refresh.
+	// In memory only; see handleHostStatus.
+	hostStatus map[string]map[string]hostStatusEntry
 	// started is when this relay process started. lastPoll is not
 	// persisted, so a schedule agent that has not polled since then is
 	// measured from here rather than flagged overdue by a restart.
@@ -251,7 +260,7 @@ func New(dir *identity.Directory, st *store.Store, cfg Config) *Server {
 	cfg.defaults()
 	s := &Server{cfg: cfg, dir: dir, store: st, hub: newHub(), prep: newChain{}, lastPoll: map[string]time.Time{}, polling: map[string]int{},
 		lastSeen: map[string]time.Time{}, persisted: map[string]time.Time{}, versions: loadVersions(st), blobs: defaultAttachmentDir(st), key: loadRelayKey(st),
-		versionWritten: map[string]time.Time{}, sessions: map[string]map[string]time.Time{}, socketWake: map[string]map[string]time.Time{}, workingOn: map[string]map[string]workingOnEntry{}, silent: map[string]silentEpisode{}, stopping: make(chan struct{}), started: cfg.Now(), emailCursor: map[string]time.Time{}, emailRetry: map[string]map[string]wake.MailMessage{}}
+		versionWritten: map[string]time.Time{}, sessions: map[string]map[string]time.Time{}, socketWake: map[string]map[string]time.Time{}, workingOn: map[string]map[string]workingOnEntry{}, hostStatus: map[string]map[string]hostStatusEntry{}, silent: map[string]silentEpisode{}, stopping: make(chan struct{}), started: cfg.Now(), emailCursor: map[string]time.Time{}, emailRetry: map[string]map[string]wake.MailMessage{}}
 	s.lookupAgent = dir.Agent
 	s.storedVersion = maps.Clone(s.versions)
 	s.pollFeatures = map[string]pollFeatures{}
@@ -354,6 +363,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/agents/self/web-status", s.handleWebStatus)
 	mux.HandleFunc("PUT /v1/agents/self/working-on", s.handleWorkingOn)
 	mux.HandleFunc("DELETE /v1/agents/self/working-on", s.handleWorkingOn)
+	mux.HandleFunc("PUT /v1/agents/self/status", s.handleHostStatus)
+	mux.HandleFunc("POST /v1/watches", s.handleWatch)
 	mux.HandleFunc("GET /v1/whoami", s.handleWhoAmI)
 	mux.HandleFunc("GET /v1/hello", s.handleHello)
 	mux.HandleFunc("POST /v1/join", s.handleJoin)
@@ -394,6 +405,7 @@ func (s *Server) AdminHandler() http.Handler {
 	mux.HandleFunc("PUT /v1/agents/self/web-status", s.handleWebStatus)
 	mux.HandleFunc("PUT /v1/agents/self/working-on", s.handleWorkingOn)
 	mux.HandleFunc("DELETE /v1/agents/self/working-on", s.handleWorkingOn)
+	mux.HandleFunc("PUT /v1/agents/self/status", s.handleHostStatus)
 	s.adminRoutes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), localAdminKey, true)))
@@ -495,6 +507,10 @@ func (s *Server) Sweep(ctx context.Context) {
 			}
 		}
 	}
+	if err := s.store.ExpireWatches(ctx); err != nil {
+		log.Printf("watches: expire: %v", err)
+	}
+	s.checkWatches(ctx, "")
 }
 
 func isLocalAdmin(ctx context.Context) bool {
@@ -1271,6 +1287,8 @@ func (s *Server) recordReply(ctx context.Context, id, agent string, rep envelope
 	} else {
 		log.Printf("reply %s: look up asker: %v", id, err)
 	}
+	// The reply may have freed the replying agent, if someone watches it.
+	s.checkWatches(ctx, agent)
 	return rep, nil
 }
 
@@ -1432,18 +1450,43 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	if !admin && s.agent(w, r) == "" {
 		return
 	}
-	agents, err := s.dir.Agents(r.Context())
+	out, err := s.roster(r.Context(), admin)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	persisted, err := s.store.AgentsLastSeen(r.Context())
+	res := map[string]any{"agents": out}
+	if s.cfg.Version != "" {
+		res["relay_version"] = s.cfg.Version
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// roster builds every joined agent's roster entry, with node fields only
+// for an admin caller. Only the directory read can fail it; the other
+// reads are logged and the entries carry what the relay still knows.
+func (s *Server) roster(ctx context.Context, admin bool) ([]client.AgentInfo, error) {
+	return s.rosterWith(ctx, admin, false)
+}
+
+// rosterWith builds the roster. Display callers take a failed queue read
+// as no backlog; with needQueue it returns the error instead, for callers
+// that act on the counts.
+func (s *Server) rosterWith(ctx context.Context, admin, needQueue bool) ([]client.AgentInfo, error) {
+	agents, err := s.dir.Agents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	persisted, err := s.store.AgentsLastSeen(ctx)
 	if err != nil {
 		// The in-memory times still answer for this run of the relay.
 		log.Printf("agents last seen: %v", err)
 	}
-	stats, err := s.store.QueueStats(r.Context())
+	stats, err := s.store.QueueStats(ctx)
 	if err != nil {
+		if needQueue {
+			return nil, fmt.Errorf("queue stats: %w", err)
+		}
 		log.Printf("agents queue stats: %v", err)
 	}
 	now := s.cfg.Now()
@@ -1461,14 +1504,15 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	var polls map[string]time.Time
 	if len(wakes) > 0 {
 		// A poll persisted before a restart may have answered a wake.
-		if polls, err = s.store.AgentsLastPoll(r.Context()); err != nil {
+		if polls, err = s.store.AgentsLastPoll(ctx); err != nil {
 			log.Printf("agents last poll: %v", err)
 		}
 	}
-	webFacts, err := s.store.WebStatuses(r.Context())
+	webFacts, err := s.store.WebStatuses(ctx)
 	if err != nil {
 		log.Printf("agents web status: %v", err)
 	}
+	quietUntil := s.started.Add(s.cfg.ClaimLease)
 	out := make([]client.AgentInfo, 0, len(agents))
 	s.mu.Lock()
 	for _, a := range agents {
@@ -1503,14 +1547,11 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		webFacts[a.Name].Apply(a, &info.Target)
 		info.WorkingOn, info.WorkingOnOthers = s.currentWorkingOn(a.Name, now)
+		applyStatus(&info, computeStatus(statusFacts{online: info.Online, wake: info.Wake, stat: stat, target: info.Target, hostBusy: s.hostBusy(a.Name, now)}, now, quietUntil))
 		out = append(out, info)
 	}
 	s.mu.Unlock()
-	res := map[string]any{"agents": out}
-	if s.cfg.Version != "" {
-		res["relay_version"] = s.cfg.Version
-	}
-	writeJSON(w, http.StatusOK, res)
+	return out, nil
 }
 
 func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
@@ -1692,6 +1733,7 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 	delete(s.sessions, in.Name)
 	delete(s.socketWake, in.Name)
 	delete(s.workingOn, in.Name)
+	delete(s.hostStatus, in.Name)
 	s.mu.Unlock()
 	s.record(r.Context(), "removed", "", "", in.Name, store.DetailJSON(map[string]any{"cancelled": len(ids)}))
 	writeJSON(w, http.StatusOK, map[string]any{"removed": in.Name, "cancelled": len(ids)})
@@ -1912,6 +1954,23 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeErr(w http.ResponseWriter, code int, err error) {
 	writeJSON(w, code, map[string]string{"error": err.Error()})
+}
+
+// decodeOne decodes exactly one JSON object from r into v, rejecting
+// unknown fields and anything after the object, so a small agent-facing
+// body cannot carry fields or values the relay would silently drop. The
+// trailing-data error reads "expected one <noun>".
+func decodeOne(r io.Reader, v any, noun string) error {
+	d := json.NewDecoder(r)
+	d.DisallowUnknownFields()
+	if err := d.Decode(v); err != nil {
+		return err
+	}
+	var extra any
+	if d.Decode(&extra) != io.EOF {
+		return errors.New("expected one " + noun)
+	}
+	return nil
 }
 
 // isAdmin reports whether the caller is the local admin socket or an admin

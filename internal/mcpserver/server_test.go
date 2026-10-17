@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -217,7 +218,7 @@ func TestAskWithParentIDContinuesChain(t *testing.T) {
 func TestListAgentsShowsWake(t *testing.T) {
 	m := testrelay.New(t, relay.Config{})
 	out := call(t, session(t, m, "grokbot"), "list_agents", nil)
-	if !strings.Contains(out, "muse: offline, wake=none, never seen") {
+	if !strings.Contains(out, "muse: offline, status=offline, wake=none, never seen") {
 		t.Fatalf("list_agents = %q", out)
 	}
 }
@@ -1087,7 +1088,7 @@ func TestListAgentsShowsGoodAt(t *testing.T) {
 			muse = line
 		}
 	}
-	if want := `muse: offline, wake=none, never seen, good_at="phone calls, texts; fast pickup"`; muse != want {
+	if want := `muse: offline, status=offline, wake=none, never seen, good_at="phone calls, texts; fast pickup"`; muse != want {
 		t.Fatalf("list_agents muse = %q, want %q", muse, want)
 	}
 }
@@ -1119,7 +1120,7 @@ func TestListAgentsShowsWorkingOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	cs := session(t, m, "grokbot")
-	if got, want := rosterLine(t, call(t, cs, "list_agents", nil), "muse"), `muse: offline, wake=none, last seen just now, working_on="Fix flaky relay test", good_at="phone calls"`; got != want {
+	if got, want := rosterLine(t, call(t, cs, "list_agents", nil), "muse"), `muse: offline, status=offline, wake=none, last seen just now, working_on="Fix flaky relay test", good_at="phone calls"`; got != want {
 		t.Fatalf("list_agents muse = %q, want %q", got, want)
 	}
 	// The relay's clock orders the two reports, so window B's must land
@@ -1128,7 +1129,7 @@ func TestListAgentsShowsWorkingOn(t *testing.T) {
 	if err := windowB.ReportWorkingOn(t.Context(), "Review the protocol doc"); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := rosterLine(t, call(t, cs, "list_agents", nil), "muse"), `muse: offline, wake=none, last seen just now, working_on="Review the protocol doc" (+1), good_at="phone calls"`; got != want {
+	if got, want := rosterLine(t, call(t, cs, "list_agents", nil), "muse"), `muse: offline, status=offline, wake=none, last seen just now, working_on="Review the protocol doc" (+1), good_at="phone calls"`; got != want {
 		t.Fatalf("two sessions: list_agents muse = %q, want %q", got, want)
 	}
 	for _, w := range []*client.Relay{windowA, windowB} {
@@ -1151,7 +1152,7 @@ func TestListAgentsWorkingOnStaysOneField(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := rosterLine(t, call(t, session(t, m, "grokbot"), "list_agents", nil), "muse")
-	if want := `muse: offline, wake=none, last seen just now, working_on="tests, wake=webhook, online"`; got != want {
+	if want := `muse: offline, status=offline, wake=none, last seen just now, working_on="tests, wake=webhook, online"`; got != want {
 		t.Fatalf("list_agents muse = %q, want %q", got, want)
 	}
 }
@@ -1176,8 +1177,34 @@ func TestListAgentsShowsUnanswered(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := call(t, session(t, m, "grokbot"), "list_agents", nil)
-	want := `muse: offline, wake=webhook, never seen, unanswered="woken 12m ago, no check-in (webhook failed: hooks.example returned 502 Bad Gateway)", good_at="phone calls"`
+	want := `muse: offline, status=offline, wake=webhook, never seen, unanswered="woken 12m ago, no check-in (webhook failed: hooks.example returned 502 Bad Gateway)", good_at="phone calls"`
 	if !strings.Contains(out, want+"\n") && !strings.HasSuffix(out, want) {
 		t.Fatalf("list_agents = %q, want a line %q", out, want)
+	}
+}
+
+// End to end over MCP: grokbot watches muse, and once muse is idle its
+// inbox gets exactly one notice, however many sweeps run. The relay's
+// clock is moved past the window after a start in which no watch fires.
+func TestWatchToolNoticeArrivesOnce(t *testing.T) {
+	var skew atomic.Int64
+	m := testrelay.New(t, relay.Config{Now: func() time.Time { return time.Now().Add(time.Duration(skew.Load())) }})
+	skew.Store(int64(10 * time.Minute))
+	if _, err := m.Client(t, "muse").Poll(t.Context(), 0); err != nil {
+		t.Fatal(err)
+	}
+	cs := session(t, m, "grokbot")
+	if out := call(t, cs, "watch", map[string]any{"agent": "muse"}); !strings.Contains(out, "one relay notice when muse is next idle") {
+		t.Fatalf("watch = %q", out)
+	}
+	m.Server.Sweep(t.Context())
+	m.Server.Sweep(t.Context())
+	inbox := call(t, cs, "check_inbox", nil)
+	if strings.Count(inbox, "muse is idle now.") != 1 || !strings.Contains(inbox, "from the Agent Tincan relay") {
+		t.Fatalf("inbox = %q", inbox)
+	}
+	m.Server.Sweep(t.Context())
+	if inbox := call(t, cs, "check_inbox", nil); strings.Contains(inbox, "muse is idle now.") {
+		t.Fatalf("second notice: %q", inbox)
 	}
 }

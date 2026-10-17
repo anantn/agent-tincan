@@ -2,15 +2,21 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/mvanhorn/agent-tincan/internal/client"
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
 )
 
@@ -241,5 +247,167 @@ func TestClaudeSessionStatusRereadsRegistry(t *testing.T) {
 	os.WriteFile(path, []byte(strings.Replace(string(b), `"idle"`, `"busy"`, 1)), 0o600)
 	if s, err = p.session(); err != nil || s.Status != "busy" {
 		t.Fatalf("after change: %+v, %v", s, err)
+	}
+}
+
+// fakeHostReporter records host status reports and can play an older relay
+// or one that fails with err.
+type fakeHostReporter struct {
+	mu          sync.Mutex
+	sent        []bool
+	unsupported bool
+	err         error
+}
+
+func (f *fakeHostReporter) ReportHostStatus(_ context.Context, busy bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sent = append(f.sent, busy)
+	if f.unsupported {
+		return client.ErrHostStatusUnsupported
+	}
+	return f.err
+}
+
+// reports is a copy of the reports sent so far.
+func (f *fakeHostReporter) reports() []bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.sent)
+}
+
+// The forwarder reports the session's state at once when it changes, and
+// again every keepalive while it stays the same, so a long turn or a relay
+// restart does not lapse to idle on the roster. An unreadable registry
+// sends nothing.
+func TestHostStatusForwarder(t *testing.T) {
+	rep := &fakeHostReporter{}
+	busy, ok := false, true
+	f := &hostStatusForwarder{r: rep, busy: func() (bool, bool) { return busy, ok }}
+	now := time.Unix(1_790_000_000, 0)
+	f.check(t.Context(), now)
+	busy = true
+	f.check(t.Context(), now.Add(5*time.Second))
+	f.check(t.Context(), now.Add(10*time.Second))
+	if want := []bool{false, true}; !slices.Equal(rep.sent, want) {
+		t.Fatalf("on change: sent %v, want %v", rep.sent, want)
+	}
+	f.check(t.Context(), now.Add(5*time.Second+sessionKeepalive))
+	if want := []bool{false, true, true}; !slices.Equal(rep.sent, want) {
+		t.Fatalf("after a keepalive: sent %v, want %v", rep.sent, want)
+	}
+	ok = false
+	f.check(t.Context(), now.Add(time.Hour))
+	if len(rep.sent) != 3 {
+		t.Fatalf("unreadable registry sent %v", rep.sent)
+	}
+}
+
+// An older relay without the route turns the forwarder off quietly.
+func TestHostStatusForwarderOlderRelay(t *testing.T) {
+	rep := &fakeHostReporter{unsupported: true}
+	busy := false
+	f := &hostStatusForwarder{r: rep, busy: func() (bool, bool) { return busy, true }}
+	now := time.Unix(1_790_000_000, 0)
+	f.check(t.Context(), now)
+	busy = true
+	f.check(t.Context(), now.Add(time.Second))
+	f.check(t.Context(), now.Add(time.Hour))
+	if len(rep.sent) != 1 {
+		t.Fatalf("kept reporting to an older relay: %v", rep.sent)
+	}
+}
+
+// A relay that fails to take a report is retried with a growing backoff,
+// not every check, and the failure is logged once per streak.
+func TestHostStatusForwarderBacksOff(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	rep := &fakeHostReporter{err: errors.New("relay unreachable")}
+	busy := true
+	f := &hostStatusForwarder{r: rep, busy: func() (bool, bool) { return busy, true }}
+	now := time.Unix(1_790_000_000, 0)
+	for i := 0; i <= 60; i += 5 {
+		f.check(t.Context(), now.Add(time.Duration(i)*time.Second))
+	}
+	if n := len(rep.reports()); n != 3 {
+		t.Fatalf("sent %d reports in a minute of failures, want 3: %v", n, rep.reports())
+	}
+	if n := strings.Count(logs.String(), "host status"); n != 1 {
+		t.Fatalf("logged %d times, want once:\n%s", n, logs.String())
+	}
+	rep.err = nil
+	f.check(t.Context(), now.Add(70*time.Second))
+	if n := len(rep.reports()); n != 4 {
+		t.Fatalf("no retry once the backoff passed: %v", rep.reports())
+	}
+	rep.err = errors.New("relay unreachable")
+	busy = false
+	f.check(t.Context(), now.Add(75*time.Second))
+	if n := strings.Count(logs.String(), "host status"); n != 2 {
+		t.Fatalf("a new failure streak logged %d times in all, want 2:\n%s", n, logs.String())
+	}
+}
+
+// When the server stops while it last reported busy, it reports not busy
+// once on the way out, so the roster does not show it busy for
+// SessionGrace after the window closed.
+func TestStartHostStatusClearsBusyOnStop(t *testing.T) {
+	rep := &fakeHostReporter{}
+	f := &hostStatusForwarder{r: rep, busy: func() (bool, bool) { return true, true }}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		startHostStatus(ctx, f)
+		close(done)
+	}()
+	for deadline := time.Now().Add(5 * time.Second); len(rep.reports()) == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("no first report")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
+	if got, want := rep.reports(), []bool{true, false}; !slices.Equal(got, want) {
+		t.Fatalf("sent %v, want %v", got, want)
+	}
+}
+
+// The Claude Code forwarder reads busy from the parent session's registry
+// file, and only when the file names the parent.
+func TestClaudeHostStatusReadsRegistry(t *testing.T) {
+	dir := t.TempDir()
+	getenv := func(k string) string {
+		if k == "CLAUDE_CONFIG_DIR" {
+			return dir
+		}
+		return ""
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(pid int, status string) {
+		b, _ := json.Marshal(map[string]any{"pid": pid, "status": status})
+		if err := os.WriteFile(filepath.Join(dir, "sessions", "4242.json"), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := newClaudeHostStatus(&fakeHostReporter{}, getenv, 4242)
+	if _, ok := f.busy(); ok {
+		t.Fatal("no registry file: want not ok")
+	}
+	write(4242, "busy")
+	if busy, ok := f.busy(); !busy || !ok {
+		t.Fatalf("busy registry: %v %v", busy, ok)
+	}
+	write(4242, "idle")
+	if busy, ok := f.busy(); busy || !ok {
+		t.Fatalf("idle registry: %v %v", busy, ok)
+	}
+	write(99, "busy")
+	if _, ok := f.busy(); ok {
+		t.Fatal("registry for another pid: want not ok")
 	}
 }
