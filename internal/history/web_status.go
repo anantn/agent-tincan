@@ -107,7 +107,8 @@ func (w *WebAgent) observeSent(res SendResult) {
 }
 
 // relayTakesLimits reports whether the relay advertises web_limits, read
-// at most every limitsRecheck. A failed read counts as no.
+// at most every limitsRecheck. A failed read counts as no and is not kept,
+// so the next report reads again.
 func (w *WebAgent) relayTakesLimits(ctx context.Context) bool {
 	now := w.clk().Now()
 	w.auth.mu.Lock()
@@ -118,10 +119,13 @@ func (w *WebAgent) relayTakesLimits(ctx context.Context) bool {
 	}
 	w.auth.mu.Unlock()
 	caps, err := w.Relay.Capabilities(ctx)
+	if err != nil {
+		return false
+	}
 	w.auth.mu.Lock()
 	defer w.auth.mu.Unlock()
-	w.auth.limitsCheckedAt, w.auth.limitsOK = now, err == nil && caps.WebLimits
-	return w.auth.limitsOK
+	w.auth.limitsCheckedAt, w.auth.limitsOK = now, caps.WebLimits
+	return caps.WebLimits
 }
 
 // flushWebStatus sends the latest observation now, if it is newer than the

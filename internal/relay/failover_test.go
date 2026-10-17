@@ -30,6 +30,8 @@ func failoverHarness(t *testing.T) (*harness, *fakeClock) {
 		}
 	}
 	listen(h, grokAddr, museAddr)
+	clearLimit(h, clk, grokAddr)
+	clearLimit(h, clk, museAddr)
 	return h, clk
 }
 
@@ -308,13 +310,123 @@ func TestFailoverExcludedTarget(t *testing.T) {
 	if res := getAs(h, instinctAddr, sent.ID); res.Request.To != "grokbot" {
 		t.Fatalf("moved to an excluded target: %+v", res.Request)
 	}
-	// A bad file excludes nothing.
+	// A bad file fails closed: nothing moves while it is broken.
 	if err := os.WriteFile(path, []byte(`{"exclude":"muse"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	h.srv.Sweep(t.Context())
-	if res := getAs(h, instinctAddr, sent.ID); res.Request.To != "muse" {
-		t.Fatalf("a bad file still excluded: %+v", res.Request)
+	if res := getAs(h, instinctAddr, sent.ID); res.Request.To != "grokbot" {
+		t.Fatalf("moved while failover.json is invalid: %+v", res.Request)
+	}
+}
+
+// An invalid failover.json (an entry that is not an agent name) moves no
+// ask: a new one to a limited agent is held back on it instead.
+func TestFailoverInvalidFileMovesNothing(t *testing.T) {
+	h, clk := failoverHarness(t)
+	path := filepath.Join(t.TempDir(), FailoverFile)
+	if err := os.WriteFile(path, []byte(`{"exclude":["not a name!"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.cfg.FailoverPath = path
+	limitAt(h, clk, grokAddr, time.Hour)
+	sent := h.send(instinctAddr, "grokbot", "summarize this paper")
+	h.srv.Sweep(t.Context())
+	res := getAs(h, instinctAddr, sent.ID)
+	if res.Request.To != "grokbot" || res.RelayNote == nil || !strings.Contains(res.RelayNote.Note, "it waits") {
+		t.Fatalf("asker sees %+v %+v", res.Request, res.RelayNote)
+	}
+	if m := auditEvents(h, "moved"); len(m) != 0 {
+		t.Fatalf("moved audit = %+v", m)
+	}
+}
+
+// A web teammate that has never reported a signed-in observation is not a
+// failover target.
+func TestFailoverSkipsUnobservedTarget(t *testing.T) {
+	h, clk, _ := statusHarness(t)
+	for name, kind := range map[string]string{"grokbot": "claude-web", "muse": "gemini-web"} {
+		if ok, err := h.st.SetAgentKind(t.Context(), name, kind); !ok || err != nil {
+			t.Fatal(ok, err)
+		}
+	}
+	listen(h, grokAddr, museAddr)
+	limitAt(h, clk, grokAddr, time.Hour)
+	sent := h.send(instinctAddr, "grokbot", "summarize this paper")
+	if sent.To != "grokbot" {
+		t.Fatalf("moved to a teammate with no sign-in observation: %+v", sent)
+	}
+}
+
+// A held-back ask is released as soon as its target reports it is signed
+// in again, without waiting for the old reset time.
+func TestFailoverHeldAskReleasedWhenLimitClears(t *testing.T) {
+	h, clk := failoverHarness(t)
+	limitAt(h, clk, museAddr, 2*time.Hour)
+	limitAt(h, clk, grokAddr, time.Hour)
+	sent := h.send(instinctAddr, "grokbot", "summarize this paper")
+	h.do(grokAddr, "GET", "/v1/poll?hold=0", "", http.StatusNoContent, nil)
+	clearLimit(h, clk, grokAddr)
+	h.srv.Sweep(t.Context())
+	var got pollResult
+	h.do(grokAddr, "GET", "/v1/poll?hold=0", "", http.StatusOK, &got)
+	if len(got.Requests) != 1 || got.Requests[0].ID != sent.ID {
+		t.Fatalf("after the limit cleared grokbot got %+v", got)
+	}
+}
+
+// When the target reports an earlier reset, a held-back ask is released
+// at the new time rather than the old one.
+func TestFailoverHeldAskReleasedAtShorterLimit(t *testing.T) {
+	h, clk := failoverHarness(t)
+	limitAt(h, clk, museAddr, 3*time.Hour)
+	limitAt(h, clk, grokAddr, 2*time.Hour)
+	sent := h.send(instinctAddr, "grokbot", "summarize this paper")
+	shorter := limitAt(h, clk, grokAddr, 30*time.Minute)
+	h.srv.Sweep(t.Context())
+	h.do(grokAddr, "GET", "/v1/poll?hold=0", "", http.StatusNoContent, nil)
+	clk.advance(shorter.Sub(clk.Now()) + time.Second)
+	var got pollResult
+	h.do(grokAddr, "GET", "/v1/poll?hold=0", "", http.StatusOK, &got)
+	if len(got.Requests) != 1 || got.Requests[0].ID != sent.ID {
+		t.Fatalf("after the shorter reset grokbot got %+v", got)
+	}
+}
+
+// A held-back ask is not reported as waiting by a peek and cannot be
+// claimed by id before its time.
+func TestHeldAskNotVisibleEarly(t *testing.T) {
+	h, clk := failoverHarness(t)
+	limitAt(h, clk, museAddr, 2*time.Hour)
+	limitAt(h, clk, grokAddr, time.Hour)
+	sent := h.send(instinctAddr, "grokbot", "summarize this paper")
+	h.do(grokAddr, "GET", "/v1/poll?hold=0&peek=1", "", http.StatusNoContent, nil)
+	h.do(grokAddr, "POST", "/v1/requests/"+sent.ID+"/claim", "", http.StatusConflict, nil)
+	if n := h.srv.QueuedCount("grokbot"); n != 0 {
+		t.Fatalf("queued count = %d", n)
+	}
+	if ids, err := h.srv.QueuedIDs("grokbot"); err != nil || len(ids) != 0 {
+		t.Fatalf("queued ids = %v %v", ids, err)
+	}
+}
+
+// An ask whose claim lapsed and was requeued may already have been typed
+// into a site, so it stays on its target when the target is limited, even
+// with a free teammate.
+func TestFailoverLapsedClaimStays(t *testing.T) {
+	h, clk := failoverHarness(t)
+	sent := h.send(instinctAddr, "grokbot", "summarize this paper")
+	h.do(grokAddr, "POST", "/v1/requests/"+sent.ID+"/claim", "", http.StatusOK, nil)
+	clk.advance(DefaultClaimLease + time.Second)
+	h.srv.Sweep(t.Context())
+	listen(h, grokAddr, museAddr)
+	limitAt(h, clk, grokAddr, time.Hour)
+	h.srv.Sweep(t.Context())
+	if res := getAs(h, instinctAddr, sent.ID); res.Request.To != "grokbot" {
+		t.Fatalf("a lapsed claim moved: %+v", res.Request)
+	}
+	if m := auditEvents(h, "moved"); len(m) != 0 {
+		t.Fatalf("moved audit = %+v", m)
 	}
 }
 

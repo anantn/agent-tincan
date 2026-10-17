@@ -174,3 +174,47 @@ func (s *Store) MoveCandidates(ctx context.Context, agent string) ([]MoveCandida
 	}
 	return out, rows.Err()
 }
+
+// ReleaseHolds brings held-back requests in line with their targets'
+// current limits, limited (each limited agent's reset time, while it is
+// ahead): a queued request held back past now whose target is not in
+// limited is released at once, and one held back past its target's reset
+// time is held only until then. It returns the agents with a request
+// released now, for their inboxes to be told.
+func (s *Store) ReleaseHolds(ctx context.Context, limited map[string]time.Time) ([]string, error) {
+	now := s.now().UnixMilli()
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT to_agent FROM requests WHERE status = ? AND expires_at > ? AND deliver_after > ?`,
+		string(envelope.StatusQueued), now, now)
+	if err != nil {
+		return nil, err
+	}
+	var agents []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		agents = append(agents, a)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var released []string
+	for _, a := range agents {
+		until := int64(0)
+		if t, ok := limited[a]; ok && t.UnixMilli() > now {
+			until = t.UnixMilli()
+		}
+		res, err := s.db.ExecContext(ctx, `UPDATE requests SET deliver_after = ? WHERE to_agent = ? AND status = ? AND expires_at > ? AND deliver_after > ?`,
+			until, a, string(envelope.StatusQueued), now, max(until, now))
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := res.RowsAffected(); n > 0 && until == 0 {
+			released = append(released, a)
+		}
+	}
+	return released, nil
+}

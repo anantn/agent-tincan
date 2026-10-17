@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -232,7 +235,11 @@ func handbackRig(t *testing.T) (*webRig, *fakeClock) {
 			t.Fatal(ok, err)
 		}
 	}
-	if _, err := rig.mesh.Client(t, "claude-web").Peek(t.Context(), 0); err != nil {
+	claude := rig.mesh.Client(t, "claude-web")
+	if _, err := claude.Peek(t.Context(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := claude.ReportWebStatus(t.Context(), envelope.WebStatus{Site: "claude.ai", State: envelope.WebAuthenticated, ObservedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 	return rig, clk
@@ -311,5 +318,80 @@ func TestRefusedHandbackFails(t *testing.T) {
 	res, err := c.Get(t.Context(), req.ID, 0)
 	if err != nil || res.Status != envelope.StatusFailed || res.Request.To != "chatgpt-web" {
 		t.Fatalf("asker sees %+v %v", res, err)
+	}
+}
+
+// Against a relay whose capabilities omit handback, a limited agent
+// answers the ask failed itself and never posts a handback.
+func TestNoHandbackCapabilityFails(t *testing.T) {
+	rig, clk := handbackRig(t)
+	target, err := url.Parse(rig.mesh.URL("chatgpt-web"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var handbacks int
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/capabilities":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"web_limits":true}`)
+			return
+		case strings.HasSuffix(r.URL.Path, "/handback"):
+			mu.Lock()
+			handbacks++
+			mu.Unlock()
+		}
+		proxy.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+	relay, err := client.NewRelayFor(client.Config{Relay: ts.URL, Agent: "chatgpt-web"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.agent.Relay = relay
+	rig.agent.noteLimit(clk.Now().Add(time.Hour))
+	c, id := rig.sendAsk(t, "codex", "summarize this paper")
+	res, err := c.Get(t.Context(), id, 0)
+	if err != nil || res.Status != envelope.StatusFailed || res.Request.To != "chatgpt-web" {
+		t.Fatalf("asker sees %+v %v", res, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if handbacks != 0 {
+		t.Fatalf("posted %d handbacks", handbacks)
+	}
+}
+
+// A failed read of the relay's capabilities is not kept: the next report
+// reads them again.
+func TestRelayTakesLimitsErrorNotCached(t *testing.T) {
+	var mu sync.Mutex
+	reads := 0
+	relay := client.NewRelayHTTP("http://relay", &http.Client{Transport: statusTransport(func(r *http.Request) (*http.Response, error) {
+		mu.Lock()
+		reads++
+		n := reads
+		mu.Unlock()
+		if n == 1 {
+			return &http.Response{StatusCode: http.StatusForbidden, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":"no"}`))}, nil
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"web_limits":true}`))}, nil
+	})})
+	w := &WebAgent{Site: SourceClaudeAI, Relay: relay, clock: newFakeClock(), Log: &bytes.Buffer{}}
+	if w.relayTakesLimits(t.Context()) {
+		t.Fatal("a failed read said yes")
+	}
+	if !w.relayTakesLimits(t.Context()) {
+		t.Fatal("the failed read was cached")
+	}
+	if !w.relayTakesLimits(t.Context()) {
+		t.Fatal("a good read was not kept")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if reads != 2 {
+		t.Fatalf("capability reads = %d, want 2", reads)
 	}
 }

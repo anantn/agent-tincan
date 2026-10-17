@@ -34,7 +34,8 @@ import (
 
 // FailoverFile is the owner's failover policy in the relay state dir:
 // {"exclude": ["perplexity-web"]} names web agents failover never moves an
-// ask to. A missing file excludes none.
+// ask to. A missing file excludes none; an unreadable or invalid one stops
+// every move until it is fixed.
 const FailoverFile = "failover.json"
 
 // Relay note kinds for failover, beside the store's: the ask moved to
@@ -87,12 +88,14 @@ func failoverIneligible(req envelope.Request, claimed bool, fromKind, toKind str
 }
 
 // failoverExcluded reads the owner's failover.json. Each pass reads it
-// once, so an edit takes effect on the next pass. A missing file excludes none; an unreadable or
-// invalid one excludes none and is logged once per distinct problem.
-func (s *Server) failoverExcluded() []string {
+// once, so an edit takes effect on the next pass. A missing file excludes
+// none. An unreadable or invalid one fails closed: ok is false, so no ask
+// moves until it is fixed, and the problem is logged once per distinct
+// problem.
+func (s *Server) failoverExcluded() (names []string, ok bool) {
 	path := s.cfg.FailoverPath
 	if path == "" {
-		return nil
+		return nil, true
 	}
 	names, err := readFailover(path)
 	s.failoverMu.Lock()
@@ -103,11 +106,11 @@ func (s *Server) failoverExcluded() []string {
 	}
 	if msg != s.failoverErr {
 		if msg != "" {
-			log.Printf("%s: %v; failover excludes no agent until it is fixed", path, err)
+			log.Printf("%s: %v; failover moves no ask until it is fixed", path, err)
 		}
 		s.failoverErr = msg
 	}
-	return names
+	return names, err == nil
 }
 
 // readFailover parses failover.json: one object whose only key, exclude,
@@ -154,9 +157,10 @@ func readFailover(path string) ([]string, error) {
 type limitFacts struct {
 	kinds   map[string]string
 	limited map[string]time.Time
-	// targets are the web chat teammates that are online, signed in, not
-	// limited and not excluded by the owner, by least backlog and then
-	// name. failoverTargets filters them per ask.
+	// targets are the web chat teammates that are online, last observed
+	// signed in, not limited and not excluded by the owner, by least
+	// backlog and then name; none while failover.json is invalid.
+	// failoverTargets filters them per ask.
 	targets []string
 }
 
@@ -173,7 +177,10 @@ func (s *Server) failoverFacts(ctx context.Context) (limitFacts, bool, error) {
 	}
 	now := s.cfg.Now()
 	f := limitFacts{kinds: map[string]string{}, limited: map[string]time.Time{}}
-	signed := map[string]bool{} // signed out
+	// signedIn: the agent's last observation of its site, from its
+	// current identity, was signed in (an agent that never reported one is
+	// not known to be).
+	signedIn := map[string]bool{}
 	for _, a := range agents {
 		f.kinds[a.Name] = a.Kind
 		var t envelope.Target
@@ -181,7 +188,7 @@ func (s *Server) failoverFacts(ctx context.Context) (limitFacts, bool, error) {
 		if !t.LimitedUntil.IsZero() {
 			f.limited[a.Name] = t.LimitedUntil
 		}
-		signed[a.Name] = t.SignedOutSite != ""
+		signedIn[a.Name] = !t.WebStatusObservedAt.IsZero() && t.SignedOutSite == ""
 	}
 	if len(f.limited) == 0 {
 		return f, false, nil
@@ -190,10 +197,13 @@ func (s *Server) failoverFacts(ctx context.Context) (limitFacts, bool, error) {
 	if err != nil {
 		return limitFacts{}, false, err
 	}
-	excluded := s.failoverExcluded()
+	excluded, ok := s.failoverExcluded()
+	if !ok {
+		return f, true, nil
+	}
 	s.mu.Lock()
 	for name, kind := range f.kinds {
-		if !onboard.IsWebChatKind(kind) || slices.Contains(excluded, name) || signed[name] || !f.limited[name].IsZero() || !s.polledRecently(s.lastPoll[name], now) {
+		if !onboard.IsWebChatKind(kind) || slices.Contains(excluded, name) || !signedIn[name] || !f.limited[name].IsZero() || !s.polledRecently(s.lastPoll[name], now) {
 			continue
 		}
 		f.targets = append(f.targets, name)
@@ -327,12 +337,21 @@ func (s *Server) failoverQueued(ctx context.Context, req envelope.Request) (enve
 
 // failoverSweep tries again, on each sweep, for every queued ask to a
 // limited web chat teammate: a teammate may have come online or its limit
-// passed since the ask was held back.
+// passed since the ask was held back. First it releases held-back asks
+// whose target is no longer limited, and holds those whose target now
+// resets sooner only until then, waking the targets of released asks.
 func (s *Server) failoverSweep(ctx context.Context) {
 	f, limited, err := s.failoverFacts(ctx)
 	if err != nil {
 		log.Printf("failover sweep: %v", err)
 		return
+	}
+	released, err := s.store.ReleaseHolds(ctx, f.limited)
+	if err != nil {
+		log.Printf("failover sweep: %v", err)
+	}
+	for _, name := range released {
+		s.hub.notify(inboxKey(name))
 	}
 	if !limited {
 		return

@@ -395,10 +395,12 @@ when its target is not a web chat agent. Such an ask is delivered as before, and
 its handback gets 409.
 
 The new target is the web chat agent with the smallest backlog (ties by name)
-that is online, not signed out, not limited, not the asker, not one the request
+that is online, whose last web status report says it is signed in (one that has
+never reported is not chosen), not limited, not the asker, not one the request
 moved off, and not listed in the owner's `failover.json` in the relay state dir
-(`{"exclude": ["perplexity-web"]}`, read on each use; a bad file excludes no one
-and is logged). The relay runs the send checks again for it (loop, hop,
+(`{"exclude": ["perplexity-web"]}`, read on each use). An unreadable or invalid
+`failover.json` fails closed: no ask moves until it is fixed (an ask to a limited
+agent is held back instead), and the problem is logged. The relay runs the send checks again for it (loop, hop,
 `approval.json` gate and default kind holds, without charging the sender's rate)
 and refuses a move that would be held. A target's own allowlist still applies
 when it handles the ask.
@@ -414,8 +416,11 @@ the request in a get, search or trace. The relay audits `moved` (ids, from, to,
 reason) and `handed_back` (outcome), and the asker gets one note naming who took
 it and that the new teammate has none of the earlier conversation. With no
 target available the ask stays with its target, held back until the reset
-(delivery skips it until then, so it is not handed back in a loop), and the
-asker is told it waits.
+(delivery, a peek's counts and pending list, the waker's queued counts and a
+claim by id all skip it until then, so it is not handed back in a loop), and the
+asker is told it waits. Each sweep releases a held-back ask at once when its
+target no longer reports a limit (it reported signed in, or the limit passed),
+and holds it only until the new reset when the target reports an earlier one.
 
 Failover adds two `requests` columns, `moved_from` (JSON array, default `''`)
 and `deliver_after` (Unix ms, default 0). An older relay opening the database

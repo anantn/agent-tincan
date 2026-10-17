@@ -798,19 +798,22 @@ func (s *Store) Deliver(ctx context.Context, agent string, limit int, lease time
 }
 
 // CountQueued returns how many requests are waiting for agent without
-// delivering them.
+// delivering them. A request held back (HoldBack) is not waiting until its
+// time, as Deliver skips it.
 func (s *Store) CountQueued(ctx context.Context, agent string) (int, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM requests WHERE to_agent = ? AND status = ? AND expires_at > ?`,
-		agent, string(envelope.StatusQueued), s.now().UnixMilli()).Scan(&n)
+	now := s.now().UnixMilli()
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM requests WHERE to_agent = ? AND status = ? AND expires_at > ? AND deliver_after <= ?`,
+		agent, string(envelope.StatusQueued), now, now).Scan(&n)
 	return n, err
 }
 
 // QueuedIDs lists the ids of agent's live requests still waiting to be
 // delivered, oldest first: the requests CountQueued counts.
 func (s *Store) QueuedIDs(ctx context.Context, agent string) ([]string, error) {
-	return s.ids(ctx, `SELECT id FROM requests WHERE to_agent = ? AND status = ? AND expires_at > ? ORDER BY created_at, rowid`,
-		agent, string(envelope.StatusQueued), s.now().UnixMilli())
+	now := s.now().UnixMilli()
+	return s.ids(ctx, `SELECT id FROM requests WHERE to_agent = ? AND status = ? AND expires_at > ? AND deliver_after <= ? ORDER BY created_at, rowid`,
+		agent, string(envelope.StatusQueued), now, now)
 }
 
 // ids runs a query whose rows are single ids.
@@ -854,8 +857,9 @@ func (s *Store) AgentsWithQueuedRequests(ctx context.Context) ([]string, error) 
 // CountUrgentQueued returns how many of agent's queued requests are urgent.
 func (s *Store) CountUrgentQueued(ctx context.Context, agent string) (int, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM requests WHERE to_agent = ? AND status = ? AND urgent = 1 AND expires_at > ?`,
-		agent, string(envelope.StatusQueued), s.now().UnixMilli()).Scan(&n)
+	now := s.now().UnixMilli()
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM requests WHERE to_agent = ? AND status = ? AND urgent = 1 AND expires_at > ? AND deliver_after <= ?`,
+		agent, string(envelope.StatusQueued), now, now).Scan(&n)
 	return n, err
 }
 
@@ -945,6 +949,7 @@ func (s *Store) QueueStats(ctx context.Context) (map[string]QueueStat, error) {
 
 // PendingRequests names up to limit of agent's queued requests, urgent
 // first and then oldest, without delivering them or reading their bodies.
+// A request held back (HoldBack) is left out until its time.
 // Queued pings come first and have their own limit, so a backlog of other
 // requests never hides a ping from a peek-based responder.
 func (s *Store) PendingRequests(ctx context.Context, agent string, limit int) ([]envelope.Pending, error) {
@@ -957,9 +962,10 @@ func (s *Store) PendingRequests(ctx context.Context, agent string, limit int) ([
 }
 
 func (s *Store) pendingRequests(ctx context.Context, agent, kindCond string, limit int) ([]envelope.Pending, error) {
+	now := s.now().UnixMilli()
 	rows, err := s.db.QueryContext(ctx, `SELECT id, from_agent, kind, urgent FROM requests
-		WHERE to_agent = ? AND status = ? AND expires_at > ? AND `+kindCond+` ORDER BY urgent DESC, created_at, rowid LIMIT ?`,
-		agent, string(envelope.StatusQueued), s.now().UnixMilli(), string(envelope.KindPing), limit)
+		WHERE to_agent = ? AND status = ? AND expires_at > ? AND deliver_after <= ? AND `+kindCond+` ORDER BY urgent DESC, created_at, rowid LIMIT ?`,
+		agent, string(envelope.StatusQueued), now, now, string(envelope.KindPing), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -992,7 +998,8 @@ func (s *Store) ClaimLeases(ctx context.Context, id, agent string, lease, urgent
 
 // ClaimLeasesFrom is ClaimLeases from the claimer's session, which is
 // recorded with the claim like claimed_at: claiming again while claimed
-// keeps the first session. "" is a claim made with no session.
+// keeps the first session. "" is a claim made with no session. A queued
+// request held back (HoldBack) cannot be claimed before its time.
 func (s *Store) ClaimLeasesFrom(ctx context.Context, id, agent, session string, lease, urgentLease time.Duration) (envelope.Request, error) {
 	req, _, err := s.lookup(ctx, id)
 	if err != nil {
@@ -1005,10 +1012,11 @@ func (s *Store) ClaimLeasesFrom(ctx context.Context, id, agent, session string, 
 	res, err := s.db.ExecContext(ctx, `UPDATE requests SET status = ?, lease_until = CASE WHEN kind = ? THEN 0 WHEN urgent = 1 THEN ? ELSE ? END,
 		claimed_at = CASE WHEN status = ? THEN claimed_at ELSE ? END,
 		claim_session = CASE WHEN status = ? THEN claim_session ELSE ? END, updated_at = ?, lease_lapsed_at = NULL
-		WHERE id = ? AND to_agent = ? AND status IN (?, ?, ?) AND expires_at > ?`,
+		WHERE id = ? AND to_agent = ? AND status IN (?, ?, ?) AND expires_at > ? AND (status != ? OR deliver_after <= ?)`,
 		string(envelope.StatusClaimed), string(envelope.KindNotify), now.Add(urgentLease).UnixMilli(), now.Add(lease).UnixMilli(),
 		string(envelope.StatusClaimed), now.UnixMilli(), string(envelope.StatusClaimed), session, now.UnixMilli(), id, agent,
-		string(envelope.StatusQueued), string(envelope.StatusDelivered), string(envelope.StatusClaimed), now.UnixMilli())
+		string(envelope.StatusQueued), string(envelope.StatusDelivered), string(envelope.StatusClaimed), now.UnixMilli(),
+		string(envelope.StatusQueued), now.UnixMilli())
 	if err != nil {
 		return envelope.Request{}, err
 	}
@@ -1510,10 +1518,12 @@ func (s *Store) SetPollFeatures(ctx context.Context, name, state string) error {
 	return err
 }
 
-// CountQueuedWithPings counts queued requests and pings from the same snapshot.
+// CountQueuedWithPings counts queued requests and pings from the same
+// snapshot, leaving out requests held back (HoldBack) until their time.
 func (s *Store) CountQueuedWithPings(ctx context.Context, agent string) (int, int, error) {
 	var queued, pings int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(CASE WHEN kind = ? THEN 1 END) FROM requests WHERE to_agent = ? AND status = ? AND expires_at > ?`,
-		string(envelope.KindPing), agent, string(envelope.StatusQueued), s.now().UnixMilli()).Scan(&queued, &pings)
+	now := s.now().UnixMilli()
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(CASE WHEN kind = ? THEN 1 END) FROM requests WHERE to_agent = ? AND status = ? AND expires_at > ? AND deliver_after <= ?`,
+		string(envelope.KindPing), agent, string(envelope.StatusQueued), now, now).Scan(&queued, &pings)
 	return queued, pings, err
 }
