@@ -60,11 +60,11 @@ Working-on line
 
 PR hygiene
 
-- R14. The PR title, body, commits, code comments, and docs describe these features as agent-tincan's own work and name no outside project, repository, company, or person as a source or comparison.
+- R14. The PR title, body, commits, code comments, and docs describe only this change and what it does for agent-tincan users.
 
 ### Key Decisions
 
-- No outside references in any PR artifact. (session-settled: user-directed, chosen over citing related work in the PR: the owner wants the PR to stand on its own.) Governs R14.
+- The PR describes only this change. (session-settled: user-directed, chosen over a background section: the owner wants the PR to stand on its own.) Governs R14.
 - Socket wake is automatic, not opt-in. The owner confirmed it should turn on by itself when the channel is not in use; R2 keeps an off switch. Governs R1, R2.
 - Working-on ships for Claude Code titles only. Claude Code's on-disk task list is absent on current installs and Codex gives `tincan mcp` no thread id, so both wait for a follow-up. Governs R10, R11.
 
@@ -290,7 +290,7 @@ U1 and U4 have no dependencies and can land first. U2 needs U1. U3 needs U2 for 
 
 ### U6. Docs, onboarding, and hygiene pass
 
-- Goal: every surface that describes wake methods, ask results, or the roster matches the new behavior, and the PR names no outside project.
+- Goal: every surface that describes wake methods, ask results, or the roster matches the new behavior, and the PR text stays on this change.
 - Requirements: R2, R4, R5, R7, R10, R13, R14.
 - Dependencies: U1, U2, U3, U4, U5.
 - Files: `README.md`, `docs/adapters/claude-code.md`, `docs/protocol.md`, `docs/trust-model.md`, `site/agents.txt`, `internal/onboard/templates/agent.tmpl`, `internal/onboard/templates/operator.tmpl`, `internal/onboard/onboard_test.go`.
@@ -300,10 +300,10 @@ U1 and U4 have no dependencies and can land first. U2 needs U1. U3 needs U2 for 
   3. `docs/protocol.md`: the `socket-wake` feature value, the new `target` fields, and the working-on routes.
   4. `docs/trust-model.md`: the messaging token's handling (R5), socket messages staying count-only (R4), and session titles reaching the roster only on opt-in (R10).
   5. `site/agents.txt` and the onboard templates: Claude Code setup and roster text.
-  6. Before opening the PR, search the full diff, the commit messages, and the PR body for any outside project, repository, company, or person named as a source or comparison, and remove any hit.
+  6. Before opening the PR, read the full diff, the commit messages, and the PR body to confirm they describe only this change (R14).
 - Test scenarios:
   - Onboard template output for a Claude Code agent mentions socket wake and does not add `--share-title`.
-- Verification: docs match behavior, and the R14 search over the diff, commits, and PR body is clean.
+- Verification: docs match behavior, and the R14 check over the diff, commits, and PR body is clean.
 
 ---
 
@@ -336,7 +336,7 @@ U1 and U4 have no dependencies and can land first. U2 needs U1. U3 needs U2 for 
 | Vet | `make vet` | all units |
 | Lint | `make lint` | all units |
 | Manual smoke | two real Claude Code windows of one agent, no `--channel`: one teammate ask starts one turn; closing a window clears its `working_on` within the grace period | U2, U5 |
-| Hygiene search | search the diff, commit messages, and PR body for outside project, repo, company, or person names | U6, R14 |
+| Hygiene check | read the diff, commit messages, and PR body against R14 | U6, R14 |
 
 ---
 
@@ -345,5 +345,5 @@ U1 and U4 have no dependencies and can land first. U2 needs U1. U3 needs U2 for 
 - Every requirement R1 to R14 is met and every acceptance example has a passing test or a recorded manual smoke result.
 - `make test`, `make vet`, and `make lint` pass.
 - Docs listed in U6 describe the shipped behavior.
-- The R14 hygiene search is clean.
+- The R14 hygiene check is clean.
 - No abandoned or experimental code from dropped approaches remains in the diff.
