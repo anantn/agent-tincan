@@ -210,3 +210,47 @@ func TestWatchWaitsForReportsAfterStart(t *testing.T) {
 		t.Fatalf("after muse went idle: %+v", n)
 	}
 }
+
+// An online agent with fresh work queued shows idle, since a peeking
+// listener keeps it online without claiming, but it is not free: the
+// watch waits until the queue drains.
+func TestWatchOnlineTargetWithQueuedWork(t *testing.T) {
+	h, _, _ := statusHarness(t)
+	h.do(museAddr, "GET", "/v1/poll?hold=0", "", http.StatusNoContent, nil)
+	sent := h.send(grokAddr, "muse", "fresh ask")
+	watch(h, instinctAddr, "muse", http.StatusCreated)
+	if a := agentInfo(t, h, macAddr, "muse"); a.Status != client.StatusIdle || a.Queued != 1 {
+		t.Fatalf("muse = %+v", a)
+	}
+	h.srv.Sweep(t.Context())
+	if n := relayNotices(h, "instinct"); len(n) != 0 {
+		t.Fatalf("fired with work queued: %+v", n)
+	}
+	h.do(museAddr, "POST", "/v1/requests/"+sent.ID+"/claim", "", http.StatusOK, nil)
+	h.do(museAddr, "POST", "/v1/requests/"+sent.ID+"/reply", `{"body":"done"}`, http.StatusOK, nil)
+	if n := relayNotices(h, "instinct"); len(n) != 1 || n[0].Body != "muse is idle now. No reply needed." {
+		t.Fatalf("after the queue drained: %+v", n)
+	}
+}
+
+// A failed queue read is not proof the target has no work: the watch
+// stays pending and fires on a later check that can read the queue.
+func TestWatchWaitsWhenQueueUnreadable(t *testing.T) {
+	h, _, _ := statusHarness(t)
+	watch(h, instinctAddr, "grokbot", http.StatusCreated)
+	db := h.st.DB()
+	if _, err := db.ExecContext(t.Context(), `ALTER TABLE requests RENAME COLUMN lease_lapsed_at TO lapsed_hidden`); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.checkWatches(t.Context(), "")
+	if pending, _ := h.st.PendingWatches(t.Context()); len(pending) != 1 {
+		t.Fatalf("watch consumed on a failed read: %+v", pending)
+	}
+	if _, err := db.ExecContext(t.Context(), `ALTER TABLE requests RENAME COLUMN lapsed_hidden TO lease_lapsed_at`); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.checkWatches(t.Context(), "")
+	if n := relayNotices(h, "instinct"); len(n) != 1 {
+		t.Fatalf("notices = %+v", n)
+	}
+}

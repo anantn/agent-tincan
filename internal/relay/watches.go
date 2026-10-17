@@ -56,9 +56,10 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, code, client.WatchResult{Agent: wt.Target, ExpiresAt: wt.Expires.UTC()})
 }
 
-// checkWatches fires every pending watch whose target is free now: idle,
-// or offline with nothing in progress or waiting, which is as free as an
-// agent the relay wakes on demand gets. Busy, stuck and any later status
+// checkWatches fires every pending watch whose target is free now: idle
+// or offline, with nothing in progress or waiting (an online agent whose
+// listener only peeks shows idle with work queued), which for an offline
+// agent the relay wakes on demand is as free as it gets. Busy, stuck and any later status
 // (a limited web agent) are not free. The sweep calls it with target ""
 // to check every watch; a reply calls it with the replying agent, since
 // only that agent's status can have changed, and skips the roster when no
@@ -80,7 +81,8 @@ func (s *Server) checkWatches(ctx context.Context, target string) {
 	if len(pending) == 0 {
 		return
 	}
-	roster, err := s.roster(ctx, false)
+	// A failed queue read is not an empty queue; the next check retries.
+	roster, err := s.rosterWith(ctx, false, true)
 	if err != nil {
 		log.Printf("watches: roster: %v", err)
 		return
@@ -91,10 +93,14 @@ func (s *Server) checkWatches(ctx context.Context, target string) {
 	}
 	for _, wt := range pending {
 		body := ""
-		switch a := info[wt.Target]; {
-		case a.Status == client.StatusIdle:
+		a := info[wt.Target]
+		if a.Queued > 0 || a.Claimed > 0 {
+			continue
+		}
+		switch a.Status {
+		case client.StatusIdle:
 			body = wt.Target + " is idle now. No reply needed."
-		case a.Status == client.StatusOffline && a.Queued == 0 && a.Claimed == 0:
+		case client.StatusOffline:
 			body = wt.Target + " is not busy now (offline). No reply needed."
 		default:
 			continue

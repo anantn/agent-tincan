@@ -96,14 +96,17 @@ func (s *Store) ExpireWatches(ctx context.Context) error {
 // FireWatch marks w fired and queues notice for its watcher in one
 // transaction, so a crash leaves neither and a racing or repeated fire
 // (the sweep and the post-reply check, or a restarted relay) queues
-// nothing. It reports false when w had already fired or expired.
+// nothing. It reports false when w had already fired or expired, or its
+// row is gone: the match on watcher, target and creation time keeps a
+// stale w from firing a newer watch that SQLite gave the same id.
 func (s *Store) FireWatch(ctx context.Context, w Watch, notice envelope.Request, ttl time.Duration) (envelope.Request, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return envelope.Request{}, false, err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE watches SET fired = 1 WHERE id = ? AND fired = 0 AND expires_at > ?`, w.ID, s.now().UnixMilli())
+	res, err := tx.ExecContext(ctx, `UPDATE watches SET fired = 1 WHERE id = ? AND watcher = ? AND target = ? AND created_at = ? AND fired = 0 AND expires_at > ?`,
+		w.ID, w.Watcher, w.Target, w.Created.UnixMilli(), s.now().UnixMilli())
 	if err != nil {
 		return envelope.Request{}, false, err
 	}

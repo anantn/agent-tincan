@@ -1466,6 +1466,13 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 // for an admin caller. Only the directory read can fail it; the other
 // reads are logged and the entries carry what the relay still knows.
 func (s *Server) roster(ctx context.Context, admin bool) ([]client.AgentInfo, error) {
+	return s.rosterWith(ctx, admin, false)
+}
+
+// rosterWith builds the roster. Display callers take a failed queue read
+// as no backlog; with needQueue it returns the error instead, for callers
+// that act on the counts.
+func (s *Server) rosterWith(ctx context.Context, admin, needQueue bool) ([]client.AgentInfo, error) {
 	agents, err := s.dir.Agents(ctx)
 	if err != nil {
 		return nil, err
@@ -1477,6 +1484,9 @@ func (s *Server) roster(ctx context.Context, admin bool) ([]client.AgentInfo, er
 	}
 	stats, err := s.store.QueueStats(ctx)
 	if err != nil {
+		if needQueue {
+			return nil, fmt.Errorf("queue stats: %w", err)
+		}
 		log.Printf("agents queue stats: %v", err)
 	}
 	now := s.cfg.Now()

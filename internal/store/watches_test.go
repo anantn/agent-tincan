@@ -129,3 +129,32 @@ func TestDeleteAgentDropsWatches(t *testing.T) {
 		t.Fatalf("pending = %+v %v", pending, err)
 	}
 }
+
+// A watch read before its row was removed does not fire a newer watch that
+// SQLite gave the same id: the new watch stays pending and the old
+// watcher gets nothing.
+func TestFireWatchReusedID(t *testing.T) {
+	s, c := open(t, ":memory:")
+	ctx := context.Background()
+	old, _, err := s.AddWatch(ctx, "claude-code", "codex", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.advance(time.Hour)
+	if err := s.ExpireWatches(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fresh, _, err := s.AddWatch(ctx, "grokbot", "muse", 24*time.Hour)
+	if err != nil || fresh.ID != old.ID {
+		t.Fatalf("fresh = %+v %v, want id %d reused", fresh, err, old.ID)
+	}
+	if _, ok, err := s.FireWatch(ctx, old, idleNotice(old), time.Hour); ok || err != nil {
+		t.Fatalf("fired a reused id: %v %v", ok, err)
+	}
+	if n, _ := s.CountQueued(ctx, "claude-code"); n != 0 {
+		t.Fatalf("old watcher got %d notices", n)
+	}
+	if pending, _ := s.PendingWatches(ctx); len(pending) != 1 || pending[0].Watcher != "grokbot" {
+		t.Fatalf("pending = %+v", pending)
+	}
+}
