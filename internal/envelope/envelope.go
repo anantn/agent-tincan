@@ -106,6 +106,10 @@ type Request struct {
 	// (failover). The relay sets it; a send cannot. Empty from relays that
 	// predate failover.
 	MovedFrom []string `json:"moved_from,omitempty"`
+	// RoomPostID marks an ask the relay built from an @mention in a room
+	// post: the id of that post. Only the relay sets it (a send cannot);
+	// older clients ignore it and see an ordinary ask.
+	RoomPostID int64 `json:"room_post_id,omitempty"`
 	// Progress is store metadata; the wire exposes it on Result.
 	Progress *Progress `json:"-"`
 
