@@ -162,6 +162,25 @@ type limitFacts struct {
 	// backlog and then name; none while failover.json is invalid.
 	// failoverTargets filters them per ask.
 	targets []string
+	// backlog is each target's queued and claimed requests.
+	backlog map[string]int
+}
+
+// sortTargets orders f.targets by least backlog and then name.
+func (f *limitFacts) sortTargets() {
+	slices.SortFunc(f.targets, func(a, b string) int {
+		if f.backlog[a] != f.backlog[b] {
+			return f.backlog[a] - f.backlog[b]
+		}
+		return strings.Compare(a, b)
+	})
+}
+
+// took counts an ask just moved to name in its backlog, so the next ask
+// in the same pass goes to whichever target is now least busy.
+func (f *limitFacts) took(name string) {
+	f.backlog[name]++
+	f.sortTargets()
 }
 
 // failoverFacts reads limitFacts. ok is false when nothing is limited (the
@@ -209,13 +228,11 @@ func (s *Server) failoverFacts(ctx context.Context) (limitFacts, bool, error) {
 		f.targets = append(f.targets, name)
 	}
 	s.mu.Unlock()
-	queued := func(name string) int { return stats[name].Queued + stats[name].Claimed }
-	slices.SortFunc(f.targets, func(a, b string) int {
-		if queued(a) != queued(b) {
-			return queued(a) - queued(b)
-		}
-		return strings.Compare(a, b)
-	})
+	f.backlog = map[string]int{}
+	for _, name := range f.targets {
+		f.backlog[name] = stats[name].Queued + stats[name].Claimed
+	}
+	f.sortTargets()
 	return f, true, nil
 }
 
@@ -369,8 +386,12 @@ func (s *Server) failoverSweep(ctx context.Context) {
 			if failoverIneligible(c.Request, c.Claimed, f.kinds[c.Request.From], f.kinds[name]) != "" {
 				continue
 			}
-			if _, err := s.failover(ctx, c.Request, f, until, c.DeliverAfter, false); err != nil && !errors.Is(err, store.ErrWrongState) {
+			out, err := s.failover(ctx, c.Request, f, until, c.DeliverAfter, false)
+			if err != nil && !errors.Is(err, store.ErrWrongState) {
 				log.Printf("failover sweep %s: %v", c.Request.ID, err)
+			}
+			if out.moved {
+				f.took(out.req.To)
 			}
 		}
 	}
@@ -380,9 +401,10 @@ func (s *Server) failoverSweep(ctx context.Context) {
 // because its site is out of messages: {"reason": "limited", "until":
 // <reset time>}. Only the claimant may hand an ask back, under its live
 // claim. The reset time is capped at the limit the agent last reported,
-// and an agent that reported none gets 409. An ask that may not move gets
-// 409 and stays claimed, so the agent answers it itself. An eligible one moves, or with nowhere to go is requeued on
-// its target, held back until the reset.
+// and an agent that reported none gets 409. An ask that may not move,
+// including one an earlier claim on lapsed, gets 409 and stays claimed, so
+// the agent answers it itself. An eligible one moves, or with nowhere to
+// go is requeued on its target, held back until the reset.
 func (s *Server) handleHandback(w http.ResponseWriter, r *http.Request) {
 	name := s.agent(w, r)
 	if name == "" {
@@ -427,8 +449,15 @@ func (s *Server) handleHandback(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	// This claim is the handback's own, vouched unsent; an earlier claim
+	// that lapsed is not, and its claimant may have sent the ask.
+	lapsed, err := s.store.ClaimLapsed(r.Context(), id)
+	if err != nil {
+		writeErr(w, statusFor(err), err)
+		return
+	}
 	reported := f.limited[name]
-	why := failoverIneligible(req, false, f.kinds[req.From], f.kinds[name])
+	why := failoverIneligible(req, lapsed, f.kinds[req.From], f.kinds[name])
 	if why == "" && reported.IsZero() {
 		why = "this agent has reported no usage limit"
 	}

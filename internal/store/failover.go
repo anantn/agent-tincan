@@ -8,7 +8,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"slices"
 	"time"
 
@@ -17,19 +19,30 @@ import (
 
 // migrateFailover adds the request columns failover needs: moved_from, the
 // JSON array of the targets a request moved off (” when none, like
-// chain), and deliver_after, before which a held-back request is not
-// delivered (Unix ms, 0 for none). It is a no-op on a current table.
+// chain), deliver_after, before which a held-back request is not
+// delivered (Unix ms, 0 for none), and claim_lapsed, 1 once any claim on
+// the request ran out of lease (that claimant may have typed it into a
+// site, so it never moves). claim_lapsed is never cleared; when it is
+// added, requests whose claim already lapsed get it. It is a no-op on a
+// current table.
 func (s *Store) migrateFailover() error {
-	for _, col := range []struct{ name, definition string }{
-		{"moved_from", "TEXT NOT NULL DEFAULT ''"},
-		{"deliver_after", "INTEGER NOT NULL DEFAULT 0"},
+	for _, col := range []struct{ name, definition, backfill string }{
+		{"moved_from", "TEXT NOT NULL DEFAULT ''", ""},
+		{"deliver_after", "INTEGER NOT NULL DEFAULT 0", ""},
+		{"claim_lapsed", "INTEGER NOT NULL DEFAULT 0", `UPDATE requests SET claim_lapsed = 1 WHERE lease_lapsed_at IS NOT NULL OR (status = 'queued' AND claimed_at > 0)`},
 	} {
 		var has bool
 		if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('requests') WHERE name = ?)`, col.name).Scan(&has); err != nil {
 			return err
 		}
-		if !has {
-			if _, err := s.db.Exec(`ALTER TABLE requests ADD COLUMN ` + col.name + ` ` + col.definition); err != nil {
+		if has {
+			continue
+		}
+		if _, err := s.db.Exec(`ALTER TABLE requests ADD COLUMN ` + col.name + ` ` + col.definition); err != nil {
+			return err
+		}
+		if col.backfill != "" {
+			if _, err := s.db.Exec(col.backfill); err != nil {
 				return err
 			}
 		}
@@ -67,8 +80,8 @@ const requeueClaim = `status = 'queued', lease_until = 0, claimed_at = 0, claim_
 // handback). Either way it ends queued for to, with the claim, lease,
 // progress and hold-back cleared as a lease requeue clears them, from added
 // to moved_from, and its pending wake note deleted so to's silence is
-// reported in turn. A request never moves to an agent it moved from. It
-// returns ErrWrongState when the request is no longer in that state for
+// reported in turn. A request never moves to an agent it moved from, nor
+// once a claim on it lapsed (ClaimLapsed). It returns ErrWrongState when the request is no longer in that state for
 // from (a Deliver or Claim won), and the moved request otherwise.
 func (s *Store) Move(ctx context.Context, id, from, to string, claimed bool) (envelope.Request, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -97,7 +110,7 @@ func (s *Store) Move(ctx context.Context, id, from, to string, claimed bool) (en
 		args = append(args, now)
 	}
 	res, err := tx.ExecContext(ctx, `UPDATE requests SET to_agent = ?, moved_from = ?, `+requeueClaim+`, deliver_after = 0, updated_at = ?
-		WHERE id = ? AND to_agent = ? AND expires_at > ? AND `+cond, args...)
+		WHERE id = ? AND to_agent = ? AND expires_at > ? AND claim_lapsed = 0 AND `+cond, args...)
 	if err != nil {
 		return envelope.Request{}, err
 	}
@@ -139,6 +152,21 @@ func (s *Store) HoldBack(ctx context.Context, id, agent string, until time.Time,
 	return req, err
 }
 
+// ClaimLapsed reports whether any claim on request id ever ran out of
+// lease. Its claimant may have typed the ask into a site before it went
+// quiet, so a later claimant handing it back cannot vouch that it is
+// unsent.
+func (s *Store) ClaimLapsed(ctx context.Context, id string) (bool, error) {
+	var lapsed bool
+	if err := s.db.QueryRowContext(ctx, `SELECT claim_lapsed = 1 FROM requests WHERE id = ?`, id).Scan(&lapsed); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, ErrNotFound
+		}
+		return false, err
+	}
+	return lapsed, nil
+}
+
 // MoveCandidate is a queued request, whether it was ever claimed (a web
 // agent that claimed it may already have typed it into its site), and when
 // HoldBack holds it back to (zero for never), so a sweep need not hold it
@@ -152,7 +180,7 @@ type MoveCandidate struct {
 // MoveCandidates returns agent's live queued requests, oldest first, each
 // with whether it was ever claimed and its hold-back time.
 func (s *Store) MoveCandidates(ctx context.Context, agent string) ([]MoveCandidate, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+requestCols+`, claimed_at > 0 OR lease_lapsed_at IS NOT NULL, deliver_after FROM requests
+	rows, err := s.db.QueryContext(ctx, `SELECT `+requestCols+`, claimed_at > 0 OR lease_lapsed_at IS NOT NULL OR claim_lapsed = 1, deliver_after FROM requests
 		WHERE to_agent = ? AND status = ? AND expires_at > ? ORDER BY created_at, rowid`,
 		agent, string(envelope.StatusQueued), s.now().UnixMilli())
 	if err != nil {

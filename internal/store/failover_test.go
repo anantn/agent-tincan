@@ -211,7 +211,14 @@ func TestFailoverMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := ask(t, s, "codex", "claude-web", "before the upgrade")
-	for _, col := range []string{"moved_from", "deliver_after"} {
+	if _, err := s.Claim(context.Background(), req.ID, "claude-web", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	s.SetClock(func() time.Time { return time.Now().Add(2 * time.Minute) })
+	if _, err := s.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, col := range []string{"moved_from", "deliver_after", "claim_lapsed"} {
 		if _, err := s.db.Exec(`ALTER TABLE requests DROP COLUMN ` + col); err != nil {
 			t.Fatal(err)
 		}
@@ -227,8 +234,45 @@ func TestFailoverMigration(t *testing.T) {
 		if err != nil || got.To != "claude-web" || len(got.MovedFrom) != 0 {
 			t.Fatalf("%+v %v", got, err)
 		}
+		if lapsed, err := s.ClaimLapsed(context.Background(), req.ID); err != nil || !lapsed {
+			t.Fatalf("lapse not carried over: %v %v", lapsed, err)
+		}
 		if err := s.Close(); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// A claim that Sweep finds lapsed marks the request for good: claiming it
+// again does not clear the mark, and it never moves, queued or handed
+// back.
+func TestClaimLapsedNeverMoves(t *testing.T) {
+	s, c := open(t, ":memory:")
+	ctx := context.Background()
+	req := ask(t, s, "codex", "claude-web", "hi")
+	if lapsed, err := s.ClaimLapsed(ctx, req.ID); err != nil || lapsed {
+		t.Fatalf("before any claim: %v %v", lapsed, err)
+	}
+	if _, err := s.Claim(ctx, req.ID, "claude-web", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	c.advance(2 * time.Minute)
+	if _, err := s.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Move(ctx, req.ID, "claude-web", "gemini-web", false); !errors.Is(err, ErrWrongState) {
+		t.Fatalf("lapsed ask moved from the queue: %v", err)
+	}
+	if _, err := s.Claim(ctx, req.ID, "claude-web", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if lapsed, err := s.ClaimLapsed(ctx, req.ID); err != nil || !lapsed {
+		t.Fatalf("after a reclaim: %v %v", lapsed, err)
+	}
+	if _, err := s.Move(ctx, req.ID, "claude-web", "gemini-web", true); !errors.Is(err, ErrWrongState) {
+		t.Fatalf("reclaimed lapsed ask handed back and moved: %v", err)
+	}
+	if _, err := s.ClaimLapsed(ctx, "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown id: %v", err)
 	}
 }

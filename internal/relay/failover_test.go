@@ -16,6 +16,7 @@ import (
 
 	"github.com/mvanhorn/agent-tincan/internal/client"
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
+	"github.com/mvanhorn/agent-tincan/internal/identity"
 	"github.com/mvanhorn/agent-tincan/internal/store"
 )
 
@@ -526,5 +527,73 @@ func TestCapabilitiesHandback(t *testing.T) {
 	h.do(grokAddr, "GET", "/v1/capabilities", "", http.StatusOK, &caps)
 	if !caps.Handback {
 		t.Fatalf("caps = %+v", caps)
+	}
+}
+
+// An ask whose earlier claim lapsed may already have been typed into a
+// site, so a later claimant cannot hand it back to move: the handback gets
+// 409 and the ask stays claimed with its target.
+func TestFailoverReclaimedAskHandbackRefused(t *testing.T) {
+	h, clk := failoverHarness(t)
+	sent := h.send(instinctAddr, "grokbot", "summarize this paper")
+	h.do(grokAddr, "POST", "/v1/requests/"+sent.ID+"/claim", "", http.StatusOK, nil)
+	clk.advance(DefaultClaimLease + time.Second)
+	h.srv.Sweep(t.Context())
+	listen(h, grokAddr, museAddr)
+	h.do(grokAddr, "POST", "/v1/requests/"+sent.ID+"/claim", "", http.StatusOK, nil)
+	until := limitAt(h, clk, grokAddr, time.Hour)
+	handback(h, grokAddr, sent.ID, until, http.StatusConflict)
+	if res := getAs(h, instinctAddr, sent.ID); res.Request.To != "grokbot" || res.Status != envelope.StatusClaimed {
+		t.Fatalf("a reclaimed ask moved: %+v %s", res.Request, res.Status)
+	}
+	if m := auditEvents(h, "moved"); len(m) != 0 {
+		t.Fatalf("moved audit = %+v", m)
+	}
+}
+
+// joinWebAgent joins name at addr as a web chat agent of kind on site,
+// online and signed in.
+func joinWebAgent(h *harness, clk *fakeClock, name, addr, kind, site string) {
+	h.t.Helper()
+	h.who.Set(addr, identity.Node{ID: "n" + name, Name: name})
+	var inv struct{ Code string }
+	h.do(macAddr, "POST", "/v1/admin/invite", `{"name":"`+name+`"}`, http.StatusOK, &inv)
+	h.do(addr, "POST", "/v1/join", `{"code":"`+inv.Code+`"}`, http.StatusOK, nil)
+	if ok, err := h.st.SetAgentKind(h.t.Context(), name, kind); !ok || err != nil {
+		h.t.Fatal(ok, err)
+	}
+	listen(h, addr)
+	body := fmt.Sprintf(`{"site":%q,"state":"authenticated","observed_at":%q}`, site, clk.Now().Format(time.RFC3339Nano))
+	h.do(addr, "PUT", "/v1/agents/self/web-status", body, http.StatusNoContent, nil)
+	clk.advance(time.Millisecond)
+}
+
+// A sweep that moves several waiting asks spreads them over the free
+// teammates by backlog rather than sending them all to the first.
+func TestFailoverSweepSpreadsAsks(t *testing.T) {
+	h, clk := failoverHarness(t)
+	const scribeAddr = "100.0.0.5:1"
+	joinWebAgent(h, clk, "scribe", scribeAddr, "chatgpt-web", "chatgpt.com")
+	limitAt(h, clk, museAddr, time.Hour)
+	body := fmt.Sprintf(`{"site":"chatgpt.com","state":"limited","until":%q,"observed_at":%q}`, clk.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano), clk.Now().Format(time.RFC3339Nano))
+	h.do(scribeAddr, "PUT", "/v1/agents/self/web-status", body, http.StatusNoContent, nil)
+	clk.advance(time.Millisecond)
+	limitAt(h, clk, grokAddr, time.Hour)
+	var ids []string
+	for i := range 4 {
+		ids = append(ids, h.send(instinctAddr, "grokbot", fmt.Sprintf("question %d", i)).ID)
+	}
+	clearLimit(h, clk, museAddr)
+	body = fmt.Sprintf(`{"site":"chatgpt.com","state":"authenticated","observed_at":%q}`, clk.Now().Format(time.RFC3339Nano))
+	h.do(scribeAddr, "PUT", "/v1/agents/self/web-status", body, http.StatusNoContent, nil)
+	clk.advance(time.Millisecond)
+	listen(h, museAddr, scribeAddr)
+	h.srv.Sweep(t.Context())
+	took := map[string]int{}
+	for _, id := range ids {
+		took[getAs(h, instinctAddr, id).Request.To]++
+	}
+	if took["muse"] != 2 || took["scribe"] != 2 {
+		t.Fatalf("asks went %v, want two each to muse and scribe", took)
 	}
 }

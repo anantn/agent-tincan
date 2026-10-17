@@ -1285,13 +1285,15 @@ func (s *Store) Sweep(ctx context.Context) ([]Transition, error) {
 		return nil, err
 	}
 	// A claim that ran out of lease is marked lapsed, so the roster can say
-	// so until the agent claims or answers the request again; a delivery
+	// so until the agent claims or answers the request again, and for good
+	// in claim_lapsed, which keeps failover from moving it; a delivery
 	// lease running out is not the agent's lapse.
 	for _, prev := range []envelope.Status{envelope.StatusDelivered, envelope.StatusClaimed} {
 		if err := collect(prev, `UPDATE requests SET status = ?, lease_until = 0, updated_at = ?, progress_note = '', progress_at = 0,
-		lease_lapsed_at = CASE WHEN status = ? THEN ? ELSE lease_lapsed_at END
+		lease_lapsed_at = CASE WHEN status = ? THEN ? ELSE lease_lapsed_at END,
+		claim_lapsed = CASE WHEN status = ? THEN 1 ELSE claim_lapsed END
 		WHERE status = ? AND lease_paused = 0 AND lease_until > 0 AND lease_until <= ?`,
-			string(envelope.StatusQueued), now, string(envelope.StatusClaimed), now, string(prev), now); err != nil {
+			string(envelope.StatusQueued), now, string(envelope.StatusClaimed), now, string(envelope.StatusClaimed), string(prev), now); err != nil {
 			return nil, err
 		}
 	}
