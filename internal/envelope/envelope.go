@@ -187,8 +187,8 @@ type Result struct {
 	// Target is what the relay said about the recipient when the request
 	// was sent. It is wire-only: the relay never stores it or returns it
 	// from a get; the client copies it from the send response onto the
-	// Result that an ask returns. Nil unless the recipient checks its inbox
-	// on a schedule, and always nil from a relay that predates schedules.
+	// Result that an ask returns. Nil from a relay that predates schedules,
+	// and from one that knows nothing about the recipient.
 	Target *Target `json:"target,omitempty"`
 	// RelayNote is the latest note the relay itself added to the request,
 	// By "relay": that the target was woken and never checked in, that its
@@ -200,16 +200,18 @@ type Result struct {
 
 // SendResponse is the relay's reply to a send: the queued request and, for
 // a recipient on a schedule, its schedule facts, or for a recipient the relay
-// wakes, its last wake. Older relays send only the request and older clients
-// ignore Target.
+// wakes, its last wake, beside how the recipient wakes and whether it is
+// listening. Older relays send only the request and older clients ignore
+// Target.
 type SendResponse struct {
 	Request
 	Target *Target `json:"target,omitempty"`
 }
 
 // Target is the relay's facts about a recipient: its schedule when it
-// checks its inbox on its own interval, or its last wake when the relay
-// wakes it (webhook or email). Every field is optional.
+// checks its inbox on its own interval, its last wake when the relay wakes
+// it (webhook or email), and how it wakes and whether it is listening now.
+// Every field is optional.
 type Target struct {
 	SignedOutSite       string    `json:"signed_out_site,omitempty"`
 	SignedOutSince      time.Time `json:"signed_out_since,omitzero"`
@@ -235,7 +237,21 @@ type Target struct {
 	// Unanswered is set when the recipient has not checked in since that
 	// wake: the send failed, or the wake grace has passed without a poll.
 	Unanswered bool `json:"unanswered,omitempty"`
+
+	// WakeVia is how the relay reaches the recipient: "socket" while one of
+	// its sessions peeks advertising socket wake, else its configured wake
+	// method. It is empty from a relay that predates it or knows no method.
+	// The name differs from AgentInfo's wake so the embed shadows nothing.
+	WakeVia string `json:"wake_via,omitempty"`
+	// Listening is the roster's online test for the recipient: it polled
+	// within one poll hold plus slack. It differs from AgentInfo's online
+	// for the same reason.
+	Listening bool `json:"listening,omitempty"`
 }
+
+// WakeViaSocket is Target.WakeVia for a recipient one of whose sessions
+// wakes through its own messaging socket.
+const WakeViaSocket = "socket"
 
 // WakeOK is Target.WakeResult for a wake the agent's platform accepted.
 // A wake sent on a fallback path adds a marker: "ok (fallback 1: email)".

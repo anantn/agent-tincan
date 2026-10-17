@@ -911,3 +911,41 @@ func TestHarkRuntimeNameIsScheduled(t *testing.T) {
 		t.Errorf("StockGoodAt(hark) = %q, want none", got)
 	}
 }
+
+// A Claude Code agent's onboarding says that without --channel tincan mcp
+// wakes the session through its own messaging socket, and the operator's
+// channel troubleshooting says the same. Sharing session titles is an owner
+// opt-in, so no onboarding output adds --share-title, and the stock setup
+// still uses --channel.
+func TestClaudeCodeOnboardingMentionsSocketWake(t *testing.T) {
+	k := build(t, Options{RelayURL: relayURL, Owner: "Matt", Operator: "grokbot", Roster: []Member{
+		{Name: "grokbot", Wake: "webhook", Kind: "vm-webhook"},
+		{Name: "claude-code", Wake: "channel", Kind: "claude-code"},
+		{Name: "zed", Wake: "channel"},
+	}})
+	for _, n := range []string{"claude-code", "zed"} {
+		txt := blockText(block(t, k, n))
+		for _, want := range []string{"without --channel", "messaging socket"} {
+			if !strings.Contains(strings.ToLower(txt), strings.ToLower(want)) {
+				t.Errorf("%s block lacks %q:\n%s", n, want, txt)
+			}
+		}
+	}
+	setup := strings.Join(block(t, k, "claude-code").Setup, "\n")
+	if !strings.Contains(setup, "--wake-socket=false") {
+		t.Errorf("claude-code setup should say how to turn socket wake off:\n%s", setup)
+	}
+	if !strings.Contains(setup, "tincan mcp --channel") || !strings.Contains(setup, `method "channel"`) {
+		t.Errorf("claude-code setup should keep the channel command and wake method:\n%s", setup)
+	}
+	if !strings.Contains(k.Operator, "own messaging socket") {
+		t.Errorf("operator channel troubleshooting should mention socket wake:\n%s", k.Operator)
+	}
+	b, err := json.Marshal(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "share-title") || strings.Contains(k.Operator, "share-title") {
+		t.Errorf("onboarding output adds --share-title:\n%s", b)
+	}
+}

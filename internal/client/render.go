@@ -64,7 +64,7 @@ func formatResult(r Result) string {
 	case r.Done():
 		return fmt.Sprintf("Request %s to %s ended: %s\n", r.Request.ID, r.Request.To, r.Status) + relayNote(r.RelayNote)
 	default:
-		return scheduleHint(r.Request.To, r.Target) + wakeHint(r.Request.To, r.Target) + relayNote(r.RelayNote) + fmt.Sprintf("No reply yet from %s. Request id %s (status %s). Check later with get_reply or `tincan get %s`.\n",
+		return scheduleHint(r.Request.To, r.Target) + wakeHint(r.Request.To, r.Target) + listenHint(r.Request.To, r.Target) + relayNote(r.RelayNote) + fmt.Sprintf("No reply yet from %s. Request id %s (status %s). Check later with get_reply or `tincan get %s`.\n",
 			r.Request.To, r.Request.ID, r.Status, r.Request.ID)
 	}
 }
@@ -101,6 +101,35 @@ func wakeHint(to string, t *envelope.Target) string {
 		return fmt.Sprintf("%s's wake at %s failed (%s) and it has not checked in yet; the request is queued.\n", to, at, t.WakeResult)
 	}
 	return fmt.Sprintf("%s was woken at %s and has not checked in yet; the request is queued.\n", to, at)
+}
+
+// listenHint tells a sender how the target wakes and whether it is
+// listening now, from the facts the relay sent with the request. It states
+// only what the relay knows and never promises a reply time. It is empty
+// without them (an old relay), and for schedule, webhook and email targets,
+// whose facts scheduleHint and wakeHint already state.
+func listenHint(to string, t *envelope.Target) string {
+	if t == nil {
+		return ""
+	}
+	switch t.WakeVia {
+	case envelope.WakeViaSocket, "channel":
+		if !t.Listening {
+			return to + " is not connected; the request waits until a session opens.\n"
+		}
+		if t.WakeVia == envelope.WakeViaSocket {
+			return to + " is listening now; a session will be prompted when it is idle.\n"
+		}
+		return to + " is listening now; a session started without channels may not see it until its next turn.\n"
+	case "wait", "command":
+		if !t.Listening {
+			return to + "'s listener is not running; the request waits until it restarts.\n"
+		}
+		return to + " is listening now and will start a turn when it picks this up.\n"
+	case "none":
+		return to + " checks only when its owner next prompts it.\n"
+	}
+	return ""
 }
 
 // FormatHeld is the held-work line for the asks an agent has claimed and
@@ -200,6 +229,22 @@ func (a AgentInfo) GoodAtField() string {
 		return ""
 	}
 	return "good_at=" + strconv.Quote(a.GoodAt)
+}
+
+// WorkingOnField is the agent's working-on line as a roster field,
+// working_on="...", quoted like GoodAtField so a title cannot read as more
+// fields, with the number of the agent's other sharing sessions after it,
+// as in working_on="Fix flaky relay test" (+2). It is empty for an agent
+// that shares no title.
+func (a AgentInfo) WorkingOnField() string {
+	if a.WorkingOn == "" {
+		return ""
+	}
+	field := "working_on=" + strconv.Quote(a.WorkingOn)
+	if a.WorkingOnOthers > 0 {
+		field += fmt.Sprintf(" (+%d)", a.WorkingOnOthers)
+	}
+	return field
 }
 
 // ageAgo renders an age for LastSeen and OverdueNote: "just now", "12m ago", "3h ago",

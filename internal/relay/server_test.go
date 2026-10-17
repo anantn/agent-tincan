@@ -1334,7 +1334,7 @@ func TestRosterScheduleFacts(t *testing.T) {
 }
 
 // The send response names the recipient's schedule so the asker can say when
-// to expect a reply; a recipient on any other method gets no target.
+// to expect a reply; a recipient on any other method gets no schedule facts.
 func TestSendResponseCarriesScheduleTarget(t *testing.T) {
 	h, clk := scheduleHarness(t)
 	var out struct {
@@ -1357,8 +1357,8 @@ func TestSendResponseCarriesScheduleTarget(t *testing.T) {
 			from = grokAddr
 		}
 		rec := h.do(from, "POST", "/v1/send", `{"to":"`+to+`","body":"hi"}`, http.StatusCreated, nil)
-		if strings.Contains(rec.Body.String(), `"target"`) {
-			t.Errorf("send to %s has a target: %s", to, rec.Body.String())
+		if strings.Contains(rec.Body.String(), `"check_every_seconds"`) || strings.Contains(rec.Body.String(), `"expect_reply_seconds"`) {
+			t.Errorf("send to %s has schedule facts: %s", to, rec.Body.String())
 		}
 	}
 }

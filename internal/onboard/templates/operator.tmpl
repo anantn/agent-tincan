@@ -120,7 +120,7 @@ Email wakes: the agent stays paused until the email or its own scheduled check w
 {{- else if eq . "wait"}}
 Wait-loop wakes: the agent must keep tincan wait running in the background. A proxy-only sandbox must reach the relay through the proxy that reaches the tailnet, set with --proxy at join.
 {{- else if eq . "channel"}}
-Channel wakes: the Claude Code session must be open with tincan mcp --channel loaded. When its machine is off, offline is expected and requests wait in the queue.
+Channel wakes: the Claude Code session must be open with tincan mcp loaded. With --channel it pushes through the channel; without --channel, tincan mcp wakes the session through its own messaging socket when it is idle. When its machine is off, offline is expected and requests wait in the queue.
 {{- else if eq . "command"}}
 Command wakes: tincan listen --exec must be running on the agent's machine. When the machine sleeps, requests wait in the queue.
 {{- else if eq . "schedule"}}

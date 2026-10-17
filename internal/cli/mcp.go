@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -20,7 +22,7 @@ import (
 )
 
 func mcpCmd() *cobra.Command {
-	var channel bool
+	var channel, wakeSocket, shareTitle bool
 	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "Run the Agent Tincan MCP server over stdio (add this to your agent's MCP config)",
@@ -35,12 +37,30 @@ for another session or a later check. Start Claude Code with:
 
   claude --dangerously-load-development-channels server:agent-tincan
 
-(channels are a research preview; custom channels need that flag).`,
+(channels are a research preview; custom channels need that flag).
+
+Without --channel, inside a Claude Code session it wakes the session
+through the session's own messaging socket instead: when the session is
+idle it sends one short message with the same count-only notice, which
+starts a turn. Each teammate request starts one turn on the machine,
+however many windows are open, and a reply to an ask goes to the window
+that asked. --wake-socket=false turns this off.
+
+With --share-title, inside a Claude Code session it also shows the
+session's title (its custom title, else the title Claude Code wrote for
+it) as a working_on field on the roster, refreshed every few minutes and
+removed when the server exits. Every joined agent can read it. Off by
+default.`,
 		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			// Record the launch before anything can fail, so tincan doctor
 			// can tell an app that never starts tincan from one that does.
 			rec := mcpserver.StartRecorder(mcpserver.LaunchDir(client.ConfigPath()), Version, channel)
 			defer func() { rec.End(err) }()
+			// The host stops its MCP servers with a signal when a session
+			// ends. Turn that into a return, so deferred cleanup runs, such
+			// as taking a shared title off the roster.
+			runCtx, stopSignals := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stopSignals()
 			r, cfg, err := connect()
 			if err != nil {
 				return err
@@ -51,24 +71,40 @@ for another session or a later check. Start Claude Code with:
 				// asks. One-shot CLI commands name no session and see all.
 				r.SetSession(newSession())
 			}
+			if shareTitle {
+				stop := startTitleSharing(runCtx, newClaudeTitleSharer(r, os.Getenv, os.Getppid()), sessionKeepalive)
+				defer stop()
+			}
 			files := mcpserver.LocalFiles(client.AttachmentDir(cfg))
 			watch := mcpserver.Watch(mcpserver.NewBuildWatch(ownBinary(), Version))
-			if !channel {
-				// Without a channel nothing calls the relay between tool
-				// calls, so keep this session live while the window is open.
-				ctx, cancel := context.WithCancel(cmd.Context())
+			route, p := pickWake(channel, wakeSocket, claudeSocketFromEnv)
+			if route != wakeByChannel {
+				ctx, cancel := context.WithCancel(runCtx)
 				defer cancel()
-				go keepSession(ctx, r, sessionKeepalive)
+				if route == wakeBySocket {
+					// The socket wake peeks, which keeps the session live.
+					shared := socketShared{dir: socketWakeDir(), agent: cfg.Agent}
+					timing := socketWakeTiming{keepalive: sessionKeepalive, retry: socketRetryAfter}
+					go socketWake(ctx, r, p, shared, timing, func() (socketTarget, error) {
+						return newClaudeSocketPusher(os.Getenv, os.Getppid())
+					})
+				} else {
+					// Without a channel nothing calls the relay between tool
+					// calls, so keep this session live while the window is open.
+					go keepSession(ctx, r, sessionKeepalive)
+				}
 				return mcpserver.New(r, Version, files, watch).Run(ctx, mcpserver.StdioRecorded(rec))
 			}
 			t := mcpserver.NewChannelTransport(mcpserver.StdioRecorded(rec))
-			ctx, cancel := context.WithCancel(cmd.Context())
+			ctx, cancel := context.WithCancel(runCtx)
 			defer cancel()
 			go pushWaiting(ctx, r, t)
 			return mcpserver.NewWithOptions(r, Version, mcpserver.ChannelOptions(), files, watch).Run(ctx, t)
 		},
 	}
 	cmd.Flags().BoolVar(&channel, "channel", false, "announce waiting teammate requests and replies in a running Claude Code session (channels preview)")
+	cmd.Flags().BoolVar(&shareTitle, "share-title", false, "show this Claude Code session's title as its working_on line on the roster, readable by every joined agent")
+	cmd.Flags().BoolVar(&wakeSocket, "wake-socket", true, "without --channel, wake an idle Claude Code session through its own messaging socket")
 	return cmd
 }
 
@@ -77,6 +113,10 @@ for another session or a later check. Start Claude Code with:
 // does not count as gone and lose its replies to another window. A channel
 // server needs none: it peeks every DefaultPollHold.
 const sessionKeepalive = 2 * time.Minute
+
+// socketRetryAfter is how long a session whose socket kept failing goes
+// without socket wake before the socket is checked again.
+const socketRetryAfter = 5 * time.Minute
 
 // keepSession calls whoami every interval until ctx ends. Whoami marks the
 // agent active and its session live, but is not a poll: it takes nothing and

@@ -120,7 +120,7 @@ If you joined with --proxy, add the same --proxy to tincan rejoin.
 {{- end -}}
 
 {{- define "instructions.claude-code" -}}
-A channel message from source "agent-tincan" means teammate requests, or a reply to your own request, are waiting. It carries only a count and senders, and nothing is claimed yet: call check_inbox to take them, handle each request and call reply, and finish any work that was waiting on a reply. If check_inbox is empty, another session already took them. If a listener opened this session for you, call check_inbox first.
+A channel message from source "agent-tincan" means teammate requests, or a reply to your own request, are waiting. It carries only a count and senders, and nothing is claimed yet: call check_inbox to take them, handle each request and call reply, and finish any work that was waiting on a reply. If check_inbox is empty, another session already took them. Without --channel, tincan mcp wakes an idle session through its own messaging socket instead: the same notice arrives as a user message, and you handle it the same way. If a listener opened this session for you, call check_inbox first.
 {{- end -}}
 
 {{- define "instructions.chatgpt" -}}
@@ -224,7 +224,7 @@ The same email can also mean a reply to your own request is waiting; tincan inbo
 {{- else if eq .Wake "wait" -}}
 Keep tincan wait & running in the background. When it exits it prints either a teammate's request (handle it and reply) or a count of replies to your own requests (run tincan inbox to read them and finish the work that was waiting on them). Then start tincan wait & again. Also keep a scheduled check that runs tincan inbox.
 {{- else if eq .Wake "channel" -}}
-tincan mcp --channel pushes a short notice into your running session when teammate requests or replies are waiting. Nothing is claimed until you call check_inbox: call it, handle each request, and reply.
+tincan mcp --channel pushes a short notice into your running session when teammate requests or replies are waiting; without --channel, in Claude Code, tincan mcp sends the same notice through the session's own messaging socket when the session is idle. Nothing is claimed until you call check_inbox: call it, handle each request, and reply.
 {{- else if eq .Wake "command" -}}
 A command run by tincan listen --exec starts you when teammates' requests, or replies to your own requests, are waiting. Call check_inbox, handle and reply to every request, and keep going until the inbox is empty.
 {{- else -}}
@@ -271,8 +271,9 @@ Ask {{.Name}} to paste the standing instructions into its cron job, so every run
 {{- define "setup.claude-code" -}}
 Add the MCP server for every project: claude mcp add --scope user agent-tincan -- tincan mcp --channel (without --scope user it exists only in the directory it was added in)
 Start the session with channels: claude --dangerously-load-development-channels server:agent-tincan (keep it open), and pre-approve mcp__agent-tincan__* in /permissions.
+Without --channel, tincan mcp wakes an idle session through its own messaging socket instead, with no channels flag (--wake-socket=false turns that off).
 On the relay host, in wake.json: set {{.Name}} to method "channel". No secret fields.
-Fallback without channels: tincan listen --exec <script that opens a Claude Code session>, and set method "command" instead.
+Fallback when no session is open: tincan listen --exec <script that opens a Claude Code session>, and set method "command" instead.
 {{template "setup.cfghint" .}}
 {{- end -}}
 

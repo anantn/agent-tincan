@@ -269,7 +269,7 @@ func TestSendResponseCarriesUnansweredWake(t *testing.T) {
 	h, clk, fw := wakeHarness(t)
 	var out envelope.SendResponse
 	h.do(museAddr, "POST", "/v1/send", `{"to":"grokbot","body":"hi"}`, http.StatusCreated, &out)
-	if out.Target != nil {
+	if out.Target == nil || !out.Target.WokenAt.IsZero() || out.Target.WakeResult != "" || out.Target.Unanswered {
 		t.Fatalf("never woken: target %+v", out.Target)
 	}
 	woke := clk.Now()
@@ -281,8 +281,8 @@ func TestSendResponseCarriesUnansweredWake(t *testing.T) {
 	}
 	fw.set("muse", store.Wake{At: woke, Result: "boom"})
 	rec := h.do(grokAddr, "POST", "/v1/send", `{"to":"muse","body":"hi"}`, http.StatusCreated, nil)
-	if strings.Contains(rec.Body.String(), `"target"`) {
-		t.Fatalf("send to a wait agent has a target: %s", rec.Body.String())
+	if strings.Contains(rec.Body.String(), `"woken_at"`) || strings.Contains(rec.Body.String(), `"wake_result"`) {
+		t.Fatalf("send to a wait agent has wake facts: %s", rec.Body.String())
 	}
 }
 
@@ -301,7 +301,7 @@ func TestWakeBeforeJoinIsIgnored(t *testing.T) {
 	}
 	var out envelope.SendResponse
 	h.do(museAddr, "POST", "/v1/send", `{"to":"grokbot","body":"hi"}`, http.StatusCreated, &out)
-	if out.Target != nil {
+	if out.Target == nil || !out.Target.WokenAt.IsZero() || out.Target.WakeResult != "" || out.Target.Unanswered {
 		t.Fatalf("send target for a wake before the join: %+v", out.Target)
 	}
 }
