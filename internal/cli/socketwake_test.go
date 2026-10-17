@@ -560,3 +560,30 @@ func TestSocketWakeOwnReplySurvivesRestart(t *testing.T) {
 		t.Fatalf("restarted run pushes = %d, want 0", n)
 	}
 }
+
+// A peek taken before another window saved its delivery must not delete
+// that delivery: the older peek simply had not seen the request yet.
+func TestSocketWakeOlderPeekKeepsNewerDelivery(t *testing.T) {
+	shared := socketShared{dir: t.TempDir(), agent: "muse"}
+	peekedAt := time.Now()
+	saved := peekedAt.Add(time.Second)
+	if err := os.MkdirAll(shared.dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := shared.write(map[string]time.Time{pendingKey("r1"): saved}); err != nil {
+		t.Fatal(err)
+	}
+	w := newFakeWindow()
+	if _, err := pushShared(t.Context(), w, client.Waiting{}, shared, peekedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := shared.read()[pendingKey("r1")]; !ok {
+		t.Fatal("an empty peek taken before the delivery deleted it")
+	}
+	if _, err := pushShared(t.Context(), w, client.Waiting{}, shared, saved.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := shared.read()[pendingKey("r1")]; ok {
+		t.Fatal("an empty peek taken after the delivery kept it")
+	}
+}

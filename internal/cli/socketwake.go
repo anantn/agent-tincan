@@ -66,6 +66,7 @@ func pushSocket(ctx context.Context, r *client.Relay, t socketTarget, shared soc
 	defer retries.Wait()
 	backoff, fails := time.Second, 0
 	for ctx.Err() == nil {
+		peekedAt := time.Now()
 		w, err := r.Peek(ctx, client.DefaultPollHold)
 		if err != nil {
 			if ctx.Err() == nil {
@@ -103,7 +104,7 @@ func pushSocket(ctx context.Context, r *client.Relay, t socketTarget, shared soc
 			// A message just started a turn, so the session is no longer
 			// idle; shared items wait for the next recheck and its own idle
 			// check rather than landing in a busy session.
-			if !wrote && settle(pushShared(ctx, t, rest, shared)) {
+			if !wrote && settle(pushShared(ctx, t, rest, shared, peekedAt)) {
 				return errSocketFailing
 			}
 		} else {
@@ -190,10 +191,12 @@ func pushOwn(ctx context.Context, t socketTarget, mine []client.Result, own map[
 // pushShared pushes one notice for the items no window on this machine has
 // delivered yet. It takes the shared lock only for this one decision, so a
 // busy window never holds up an idle one. When another window holds the
-// lock it writes nothing and the next recheck tries again. A delivery the
+// lock it writes nothing and the next recheck tries again. peekedAt is when
+// the peek behind w started; a delivery saved after it is newer than what
+// w shows and is never taken as gone from the queue. A delivery the
 // record could not save counts as a failed write: the next peek would send
 // it again, so repeated save failures end socket wake like a failing socket.
-func pushShared(ctx context.Context, t socketTarget, w client.Waiting, shared socketShared) (bool, error) {
+func pushShared(ctx context.Context, t socketTarget, w client.Waiting, shared socketShared, peekedAt time.Time) (bool, error) {
 	release, ok, err := shared.tryLock()
 	if err != nil {
 		log.Printf("tincan socket wake: lock: %v", err)
@@ -236,7 +239,7 @@ func pushShared(ctx context.Context, t socketTarget, w client.Waiting, shared so
 				rec[k] = now
 				changed = true
 			}
-		case strings.HasPrefix(k, "q#") || (completeQueue && strings.HasPrefix(k, "q:")) || now.Sub(at) >= socketRecordKeep:
+		case (strings.HasPrefix(k, "q#") || (completeQueue && strings.HasPrefix(k, "q:"))) && at.Before(peekedAt), now.Sub(at) >= socketRecordKeep:
 			delete(rec, k)
 			changed = true
 		}
