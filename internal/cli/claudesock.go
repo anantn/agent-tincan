@@ -142,7 +142,9 @@ func (p *claudeSocketPusher) Push(ctx context.Context, content string, meta map[
 	}
 	defer c.Close()
 	deadline, _ := ctx.Deadline()
-	c.SetWriteDeadline(deadline)
+	if err := c.SetWriteDeadline(deadline); err != nil {
+		return fmt.Errorf("claude session socket %s: %w", p.socket, err)
+	}
 	if _, err := c.Write(frames); err != nil {
 		return fmt.Errorf("claude session socket %s: write: %w", p.socket, err)
 	}

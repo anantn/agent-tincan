@@ -65,7 +65,7 @@ func TestWorkingOnRejects(t *testing.T) {
 	h, _, _ := wakeHarness(t)
 	for _, bad := range []string{
 		`{"text":"line one\nline two"}`,
-		`{"text":"hidden​mark"}`,
+		"{\"text\":\"hidden\u200bmark\"}",
 		`{"text":"` + strings.Repeat("x", 121) + `"}`,
 		`{"text":"   "}`,
 		`{"text":"ok","agent":"grokbot"}`,
