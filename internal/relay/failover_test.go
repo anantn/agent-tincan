@@ -171,9 +171,10 @@ func TestFailoverCouncilAskStays(t *testing.T) {
 	}
 }
 
-// Asks that were held, are notifies, are in a group, carry attachments,
-// name a conversation, have a clarification exchange, may have been sent
-// already, or involve dot-web, a council or a non-web target never move.
+// Asks that were held, are notifies, are in a group, came from a room
+// mention, carry attachments, name a conversation, have a clarification
+// exchange, may have been sent already, or involve dot-web, a council or
+// a non-web target never move.
 func TestFailoverIneligible(t *testing.T) {
 	ask := envelope.Request{Kind: envelope.KindAsk, Body: "summarize this paper"}
 	with := func(f func(*envelope.Request)) envelope.Request { r := ask; f(&r); return r }
@@ -188,6 +189,7 @@ func TestFailoverIneligible(t *testing.T) {
 		"held":           {req: with(func(r *envelope.Request) { r.WasHeld, r.Approved = true, true })},
 		"notify":         {req: with(func(r *envelope.Request) { r.Kind = envelope.KindNotify })},
 		"group":          {req: with(func(r *envelope.Request) { r.Group = "g1" })},
+		"room mention":   {req: with(func(r *envelope.Request) { r.RoomPostID = 7 })},
 		"attachments":    {req: with(func(r *envelope.Request) { r.Attachments = []envelope.Attachment{{ID: "a"}} })},
 		"conversation":   {req: with(func(r *envelope.Request) { r.Body = "  Conversation: abc123\nand more" })},
 		"exchange":       {req: with(func(r *envelope.Request) { r.Exchanges = []envelope.Exchange{{Question: "which?"}} })},

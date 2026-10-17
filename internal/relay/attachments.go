@@ -118,6 +118,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.Watches = true
 	caps.WebLimits = true
 	caps.Handback = true
+	caps.Rooms = true
 	writeJSON(w, http.StatusOK, caps)
 }
 

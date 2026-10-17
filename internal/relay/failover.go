@@ -60,8 +60,9 @@ type MoveChecker interface {
 // site), and the kinds of its sender and target. An ask never moves when
 // it is to or from dot-web or any agent outside the six web chat kinds
 // (the target), from a council, was ever held, is not an ask, is part of a
-// group, carries attachments, names a conversation, has a clarification
-// exchange or was resumed, or may have been sent already.
+// group, came from a room mention (the reply posts to the room as the
+// mentioned member), carries attachments, names a conversation, has a
+// clarification exchange or was resumed, or may have been sent already.
 func failoverIneligible(req envelope.Request, claimed bool, fromKind, toKind string) string {
 	first, _, _ := strings.Cut(req.Body, "\n")
 	switch {
@@ -75,6 +76,8 @@ func failoverIneligible(req envelope.Request, claimed bool, fromKind, toKind str
 		return "it was held for the owner's approval"
 	case req.Group != "":
 		return "it is part of a group"
+	case req.RoomPostID != 0:
+		return "it came from a room mention"
 	case len(req.Attachments) > 0:
 		return "it carries attachments"
 	case strings.HasPrefix(strings.ToLower(strings.TrimSpace(first)), "conversation:"):
