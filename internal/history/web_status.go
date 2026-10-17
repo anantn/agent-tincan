@@ -37,9 +37,9 @@ func (w *WebAgent) observeAuth(err error) {
 	if err != nil && !errors.Is(err, ErrNotLoggedIn) {
 		return
 	}
-	state := "authenticated"
+	state := envelope.WebAuthenticated
 	if err != nil {
-		state = "signed_out"
+		state = envelope.WebSignedOut
 	}
 	var until time.Time
 	if err == nil && w.Native != nil {
@@ -55,7 +55,7 @@ func (w *WebAgent) observeAuth(err error) {
 	}
 	if state != w.auth.latest.State || !until.Equal(w.auth.latest.Until) {
 		switch {
-		case state == "signed_out":
+		case state == envelope.WebSignedOut:
 			w.logf("signed out of %s; sign in there in Chrome without restarting Chrome", w.site().host)
 		case state == envelope.WebLimited:
 			w.logf("%s is out of messages on this account until %s; not sending to it until then", w.site().host, until.Local().Format(time.RFC3339))
@@ -138,7 +138,7 @@ func (w *WebAgent) flushWebStatus(ctx context.Context) error {
 	rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if snapshot.State == envelope.WebLimited && !w.relayTakesLimits(rctx) {
-		snapshot.State, snapshot.Until = "authenticated", time.Time{}
+		snapshot.State, snapshot.Until = envelope.WebAuthenticated, time.Time{}
 	}
 	err := w.Relay.ReportWebStatus(rctx, snapshot)
 	w.auth.mu.Lock()
@@ -196,7 +196,7 @@ func (w *WebAgent) authRequest(ctx context.Context, op Op, args OpArgs) (json.Ra
 		w.observeAuth(nil)
 	} else {
 		w.auth.mu.Lock()
-		needs := w.auth.latest.State != "authenticated" || w.clk().Now().Sub(w.auth.fresh) >= webProbeInterval
+		needs := w.auth.latest.State != envelope.WebAuthenticated || w.clk().Now().Sub(w.auth.fresh) >= webProbeInterval
 		w.auth.mu.Unlock()
 		if needs {
 			w.probeSession(ctx)

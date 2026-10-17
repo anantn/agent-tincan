@@ -57,6 +57,10 @@ func (s *Store) wrongState(ctx context.Context, id, agent string) error {
 	return ErrWrongState
 }
 
+// requeueClaim is the SET list that returns a request to the queue with
+// its claim, lease and progress cleared, shared by Move and HoldBack.
+const requeueClaim = `status = 'queued', lease_until = 0, claimed_at = 0, claim_session = '', progress_note = '', progress_at = 0, lease_lapsed_at = NULL`
+
 // Move makes to the target of request id in place of from, keeping its id,
 // sender, chain and body. A queued request moves (claimed false); a claimed
 // one moves only from its claimant under a live claim (claimed true, a
@@ -92,8 +96,7 @@ func (s *Store) Move(ctx context.Context, id, from, to string, claimed bool) (en
 	if claimed {
 		args = append(args, now)
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE requests SET to_agent = ?, moved_from = ?, status = 'queued', lease_until = 0, claimed_at = 0, claim_session = '',
-		progress_note = '', progress_at = 0, lease_lapsed_at = NULL, deliver_after = 0, updated_at = ?
+	res, err := tx.ExecContext(ctx, `UPDATE requests SET to_agent = ?, moved_from = ?, `+requeueClaim+`, deliver_after = 0, updated_at = ?
 		WHERE id = ? AND to_agent = ? AND expires_at > ? AND `+cond, args...)
 	if err != nil {
 		return envelope.Request{}, err
@@ -121,8 +124,7 @@ func (s *Store) HoldBack(ctx context.Context, id, agent string, until time.Time,
 	query := `UPDATE requests SET deliver_after = ? WHERE id = ? AND to_agent = ? AND status = 'queued' AND expires_at > ?`
 	args := []any{until.UnixMilli(), id, agent, now}
 	if claimed {
-		query = `UPDATE requests SET status = 'queued', deliver_after = ?, updated_at = ?, lease_until = 0, claimed_at = 0, claim_session = '',
-			progress_note = '', progress_at = 0, lease_lapsed_at = NULL
+		query = `UPDATE requests SET ` + requeueClaim + `, deliver_after = ?, updated_at = ?
 			WHERE id = ? AND to_agent = ? AND status = 'claimed' AND lease_until > ? AND expires_at > ?`
 		args = []any{until.UnixMilli(), now, id, agent, now, now}
 	}
@@ -137,17 +139,20 @@ func (s *Store) HoldBack(ctx context.Context, id, agent string, until time.Time,
 	return req, err
 }
 
-// MoveCandidate is a queued request and whether it was ever claimed: a
-// web agent that claimed it may already have typed it into its site.
+// MoveCandidate is a queued request, whether it was ever claimed (a web
+// agent that claimed it may already have typed it into its site), and when
+// HoldBack holds it back to (zero for never), so a sweep need not hold it
+// back again.
 type MoveCandidate struct {
-	Request envelope.Request
-	Claimed bool
+	Request      envelope.Request
+	Claimed      bool
+	DeliverAfter time.Time
 }
 
 // MoveCandidates returns agent's live queued requests, oldest first, each
-// with whether it was ever claimed.
+// with whether it was ever claimed and its hold-back time.
 func (s *Store) MoveCandidates(ctx context.Context, agent string) ([]MoveCandidate, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+requestCols+`, claimed_at > 0 OR lease_lapsed_at IS NOT NULL FROM requests
+	rows, err := s.db.QueryContext(ctx, `SELECT `+requestCols+`, claimed_at > 0 OR lease_lapsed_at IS NOT NULL, deliver_after FROM requests
 		WHERE to_agent = ? AND status = ? AND expires_at > ? ORDER BY created_at, rowid`,
 		agent, string(envelope.StatusQueued), s.now().UnixMilli())
 	if err != nil {
@@ -157,9 +162,13 @@ func (s *Store) MoveCandidates(ctx context.Context, agent string) ([]MoveCandida
 	var out []MoveCandidate
 	for rows.Next() {
 		var m MoveCandidate
+		var after int64
 		var err error
-		if m.Request, _, err = scanRequest(extraCols{rows, []any{&m.Claimed}}); err != nil {
+		if m.Request, _, err = scanRequest(extraCols{rows, []any{&m.Claimed, &after}}); err != nil {
 			return nil, err
+		}
+		if after > 0 {
+			m.DeliverAfter = time.UnixMilli(after)
 		}
 		out = append(out, m)
 	}

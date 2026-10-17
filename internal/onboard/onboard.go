@@ -373,10 +373,9 @@ var WebChatKinds = []string{KindChatGPTWeb, KindClaudeWeb, KindGrokWeb, KindGemi
 // IsWebChatKind reports whether kind is in WebChatKinds.
 func IsWebChatKind(kind string) bool { return slices.Contains(WebChatKinds, kind) }
 
-// isWebKind reports whether kind is one of the web agents.
-func isWebKind(kind string) bool {
-	return kind == KindChatGPTWeb || kind == KindClaudeWeb || kind == KindGrokWeb || kind == KindGeminiWeb || kind == KindPerplexityWeb || kind == KindCopilotWeb || kind == KindDotWeb
-}
+// isWebKind reports whether kind is one of the web agents: a web chat
+// kind or dot-web.
+func isWebKind(kind string) bool { return IsWebChatKind(kind) || kind == KindDotWeb }
 
 func agentBlock(d agentData) (AgentBlock, error) {
 	join, err := execute(templateFor("join."+d.Kind, "join.default"), d)

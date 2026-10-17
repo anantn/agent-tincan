@@ -279,6 +279,12 @@ type Relay struct {
 	// reply to its own ask from one the relay shows every session.
 	sentMu  sync.Mutex
 	sentIDs map[string]bool
+
+	// handbackAt is when Handback last read the relay's handback
+	// capability, and handbackOK what it said.
+	handbackMu sync.Mutex
+	handbackAt time.Time
+	handbackOK bool
 }
 
 // maxSentIDs bounds sentIDs. Past it the record starts over, and a reply
@@ -698,26 +704,51 @@ const (
 )
 
 // ErrHandbackUnsupported means the relay predates handbacks: the web agent
-// answers the request as it did before failover.
+// answers the request itself.
 var ErrHandbackUnsupported = errors.New("this relay does not take handbacks (upgrade the relay)")
+
+// handbackRecheck is how long a read of the relay's handback capability is
+// trusted before Handback reads it again (the relay may be upgraded).
+const handbackRecheck = 10 * time.Minute
 
 // Handback gives back request id, which the caller (a web agent) claimed
 // and did not send because its site is out of messages until until, so
 // the relay can move it to another web agent. A 409 means the request may
 // not move and is still the caller's to answer. It checks the relay's
-// capabilities first, so an older relay is refused with
-// ErrHandbackUnsupported.
+// capabilities first, at most every handbackRecheck, so an older relay is
+// refused with ErrHandbackUnsupported. A failed read is not kept.
 func (r *Relay) Handback(ctx context.Context, id string, until time.Time) (HandbackResult, error) {
-	caps, err := r.Capabilities(ctx)
+	ok, err := r.takesHandback(ctx)
 	if err != nil {
 		return HandbackResult{}, fmt.Errorf("check relay capabilities: %w", err)
 	}
-	if !caps.Handback {
+	if !ok {
 		return HandbackResult{}, ErrHandbackUnsupported
 	}
 	var out HandbackResult
-	err = r.call(ctx, r.api, "POST", "/v1/requests/"+url.PathEscape(id)+"/handback", map[string]any{"reason": "limited", "until": until.UTC()}, &out)
+	err = r.call(ctx, r.api, "POST", "/v1/requests/"+url.PathEscape(id)+"/handback", map[string]any{"reason": envelope.WebLimited, "until": until.UTC()}, &out)
 	return out, err
+}
+
+// takesHandback reports whether the relay advertises handbacks, from a
+// read made within handbackRecheck when there is one.
+func (r *Relay) takesHandback(ctx context.Context) (bool, error) {
+	now := time.Now()
+	r.handbackMu.Lock()
+	if !r.handbackAt.IsZero() && now.Sub(r.handbackAt) < handbackRecheck {
+		ok := r.handbackOK
+		r.handbackMu.Unlock()
+		return ok, nil
+	}
+	r.handbackMu.Unlock()
+	caps, err := r.Capabilities(ctx)
+	if err != nil {
+		return false, err
+	}
+	r.handbackMu.Lock()
+	defer r.handbackMu.Unlock()
+	r.handbackAt, r.handbackOK = now, caps.Handback
+	return caps.Handback, nil
 }
 
 // Remove unbinds an agent (admin devices only).

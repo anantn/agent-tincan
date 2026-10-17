@@ -43,7 +43,7 @@ func (s *Store) migrateWebStatus() error {
 // A limited observation records its reset time; any other clears it.
 func (s *Store) SetWebStatus(ctx context.Context, a identity.Agent, in envelope.WebStatus, now time.Time) error {
 	var since any
-	if in.State == "signed_out" {
+	if in.State == envelope.WebSignedOut {
 		since = now.UnixMilli()
 	}
 	var limited int64
@@ -56,7 +56,7 @@ func (s *Store) SetWebStatus(ctx context.Context, a identity.Agent, in envelope.
  since=CASE WHEN excluded.since IS NULL THEN NULL ELSE COALESCE(web_status.since,excluded.since) END,
  notice_pending=CASE WHEN excluded.since IS NULL THEN 0 WHEN web_status.since IS NULL THEN 1 ELSE web_status.notice_pending END,
  notice_retry_at=CASE WHEN excluded.since IS NULL OR web_status.since IS NULL THEN 0 ELSE web_status.notice_retry_at END
- WHERE excluded.observed_at > web_status.observed_at`, in.Site, in.ObservedAt.UnixMilli(), since, in.State == "signed_out", limited, a.Name, a.NodeID, a.JoinedAt.UnixMilli())
+ WHERE excluded.observed_at > web_status.observed_at`, in.Site, in.ObservedAt.UnixMilli(), since, in.State == envelope.WebSignedOut, limited, a.Name, a.NodeID, a.JoinedAt.UnixMilli())
 	return err
 }
 

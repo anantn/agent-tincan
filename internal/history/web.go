@@ -802,17 +802,7 @@ func (w *WebAgent) handBack(ctx context.Context, req envelope.Request, until tim
 // limitReply is the answer to a request not sent because the site is out
 // of messages until until.
 func (w *WebAgent) limitReply(until time.Time) string {
-	return fmt.Sprintf("Nothing was sent: %s is out of messages on this account until %s. Ask again after that, or ask another teammate.", siteLimiter(w.Site), utcClock(until, w.clk().Now()))
-}
-
-// utcClock is t as "16:40 UTC", with the date when it is not now's day:
-// "Oct 2 16:40 UTC". The asker's zone is not known here.
-func utcClock(t, now time.Time) string {
-	t, now = t.UTC(), now.UTC()
-	if t.YearDay() == now.YearDay() && t.Year() == now.Year() {
-		return t.Format("15:04 UTC")
-	}
-	return t.Format("Jan 2 15:04 UTC")
+	return fmt.Sprintf("Nothing was sent: %s is out of messages on this account until %s. Ask again after that, or ask another teammate.", siteLimiter(w.Site), client.UTCClock(until, w.clk().Now()))
 }
 
 func (w *WebAgent) sendFailure(err error, convID string) string {

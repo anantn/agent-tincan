@@ -107,8 +107,8 @@ func TestSendRetryAfterYieldsLimited(t *testing.T) {
 	}
 }
 
-// A bare 429 is a short rate limit, not a usage limit: today's cooldown,
-// no limited report.
+// A bare 429 is a short rate limit, not a usage limit: a cooldown and no
+// limited report.
 func TestBareRateLimitIsNotLimited(t *testing.T) {
 	rig, _ := limitRig(t)
 	rig.browser.sendErr = "rate_limited"
@@ -268,8 +268,7 @@ func TestLimitBeforeClickHandsBack(t *testing.T) {
 	}
 }
 
-// A 429 after the click replies failed as before: the message may have
-// gone out.
+// A 429 after the click replies failed: the message may have gone out.
 func TestLimitAfterClickFails(t *testing.T) {
 	rig, _ := handbackRig(t)
 	rig.browser.sendErr, rig.browser.sendRetryAfter, rig.browser.sendClicked = "rate_limited", 900, true
@@ -297,7 +296,7 @@ func TestLimitedAgentHandsBackBeforeSending(t *testing.T) {
 	}
 }
 
-// An ask the relay will not move (409) is answered failed as before.
+// An ask the relay will not move (409) is answered failed.
 func TestRefusedHandbackFails(t *testing.T) {
 	rig, clk := handbackRig(t)
 	rig.agent.noteLimit(clk.Now().Add(time.Hour))

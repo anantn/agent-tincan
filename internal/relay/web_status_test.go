@@ -68,7 +68,7 @@ func TestWebLimitOnRoster(t *testing.T) {
 	until := clk.Now().Add(90 * time.Minute).UTC().Truncate(time.Millisecond)
 	webLimit(h, clk.Now(), until, http.StatusNoContent)
 	a := agentInfo(t, h, macAddr, "grokbot")
-	if a.Status != client.StatusLimited || !a.LimitedUntil.Equal(until) || a.StatusReason != "until "+utcClock(until, clk.Now()) {
+	if a.Status != client.StatusLimited || !a.LimitedUntil.Equal(until) || a.StatusReason != "until "+client.UTCClock(until, clk.Now()) {
 		t.Fatalf("limited agent = %+v", a)
 	}
 	var sent envelope.SendResponse

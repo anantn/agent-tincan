@@ -86,8 +86,8 @@ func failoverIneligible(req envelope.Request, claimed bool, fromKind, toKind str
 	return ""
 }
 
-// failoverExcluded reads the owner's failover.json on each use, so an edit
-// takes effect at once. A missing file excludes none; an unreadable or
+// failoverExcluded reads the owner's failover.json. Each pass reads it
+// once, so an edit takes effect on the next pass. A missing file excludes none; an unreadable or
 // invalid one excludes none and is logged once per distinct problem.
 func (s *Server) failoverExcluded() []string {
 	path := s.cfg.FailoverPath
@@ -149,16 +149,19 @@ func readFailover(path string) ([]string, error) {
 
 // limitFacts is what failover needs about the roster, read once per pass:
 // each agent's kind and, for a web agent that reported one, its usage
-// limit's reset time while that is ahead.
+// limit's reset time while that is ahead, and when anything is limited,
+// the teammates an ask could move to.
 type limitFacts struct {
 	kinds   map[string]string
 	limited map[string]time.Time
-	signed  map[string]bool // signed out
-	queued  map[string]int
+	// targets are the web chat teammates that are online, signed in, not
+	// limited and not excluded by the owner, by least backlog and then
+	// name. failoverTargets filters them per ask.
+	targets []string
 }
 
 // failoverFacts reads limitFacts. ok is false when nothing is limited (the
-// common case), so a sweep does no more.
+// common case), so a sweep does no more and targets is left empty.
 func (s *Server) failoverFacts(ctx context.Context) (limitFacts, bool, error) {
 	statuses, err := s.store.WebStatuses(ctx)
 	if err != nil {
@@ -169,7 +172,8 @@ func (s *Server) failoverFacts(ctx context.Context) (limitFacts, bool, error) {
 		return limitFacts{}, false, err
 	}
 	now := s.cfg.Now()
-	f := limitFacts{kinds: map[string]string{}, limited: map[string]time.Time{}, signed: map[string]bool{}}
+	f := limitFacts{kinds: map[string]string{}, limited: map[string]time.Time{}}
+	signed := map[string]bool{} // signed out
 	for _, a := range agents {
 		f.kinds[a.Name] = a.Kind
 		var t envelope.Target
@@ -177,7 +181,7 @@ func (s *Server) failoverFacts(ctx context.Context) (limitFacts, bool, error) {
 		if !t.LimitedUntil.IsZero() {
 			f.limited[a.Name] = t.LimitedUntil
 		}
-		f.signed[a.Name] = t.SignedOutSite != ""
+		signed[a.Name] = t.SignedOutSite != ""
 	}
 	if len(f.limited) == 0 {
 		return f, false, nil
@@ -186,35 +190,35 @@ func (s *Server) failoverFacts(ctx context.Context) (limitFacts, bool, error) {
 	if err != nil {
 		return limitFacts{}, false, err
 	}
-	f.queued = map[string]int{}
-	for name, st := range stats {
-		f.queued[name] = st.Queued + st.Claimed
-	}
-	return f, true, nil
-}
-
-// failoverTargets are the teammates req could move to, best first: web chat
-// kinds that are online, signed in, not limited, not req's asker, current
-// target or a target it moved from, and not excluded by the owner, by
-// least backlog and then name.
-func (s *Server) failoverTargets(req envelope.Request, f limitFacts, now time.Time) []string {
 	excluded := s.failoverExcluded()
-	var out []string
 	s.mu.Lock()
 	for name, kind := range f.kinds {
-		if !onboard.IsWebChatKind(kind) || name == req.To || name == req.From || slices.Contains(req.MovedFrom, name) ||
-			slices.Contains(excluded, name) || f.signed[name] || !f.limited[name].IsZero() || !s.polledRecently(s.lastPoll[name], now) {
+		if !onboard.IsWebChatKind(kind) || slices.Contains(excluded, name) || signed[name] || !f.limited[name].IsZero() || !s.polledRecently(s.lastPoll[name], now) {
 			continue
 		}
-		out = append(out, name)
+		f.targets = append(f.targets, name)
 	}
 	s.mu.Unlock()
-	slices.SortFunc(out, func(a, b string) int {
-		if f.queued[a] != f.queued[b] {
-			return f.queued[a] - f.queued[b]
+	queued := func(name string) int { return stats[name].Queued + stats[name].Claimed }
+	slices.SortFunc(f.targets, func(a, b string) int {
+		if queued(a) != queued(b) {
+			return queued(a) - queued(b)
 		}
 		return strings.Compare(a, b)
 	})
+	return f, true, nil
+}
+
+// failoverTargets are the teammates req could move to, best first: f's
+// targets other than req's asker, current target or a target it moved
+// from.
+func failoverTargets(req envelope.Request, f limitFacts) []string {
+	var out []string
+	for _, name := range f.targets {
+		if name != req.To && name != req.From && !slices.Contains(req.MovedFrom, name) {
+			out = append(out, name)
+		}
+	}
 	return out
 }
 
@@ -240,13 +244,20 @@ type failoverOutcome struct {
 // failover moves req, an eligible ask to a target limited until until, to
 // the best target that passes the move checks, or else holds it back on
 // its target until until. claimed says req is held by its target's live
-// claim (a handback). It tells the asker either way, wakes the new target
-// after a move, and records the audit event. It returns ErrWrongState
-// when the request changed under it (a Deliver or Claim won).
-func (s *Server) failover(ctx context.Context, req envelope.Request, f limitFacts, until time.Time, claimed bool, reason string) (failoverOutcome, error) {
+// claim (a handback). heldUntil is when a queued req is already held back
+// to (zero for none): when that is not before until (to the millisecond
+// the store keeps), the hold and its note are already in place and no
+// write is made. It tells the asker either way, wakes the new
+// target after a move, and records the audit event. It returns
+// ErrWrongState when the request changed under it (a Deliver or Claim won).
+func (s *Server) failover(ctx context.Context, req envelope.Request, f limitFacts, until, heldUntil time.Time, claimed bool) (failoverOutcome, error) {
 	now := s.cfg.Now()
 	from := req.To
-	for _, to := range s.failoverTargets(req, f, now) {
+	reason := envelope.WebLimited
+	if claimed {
+		reason = "handed back"
+	}
+	for _, to := range failoverTargets(req, f) {
 		if err := s.checkMove(ctx, req, to); err != nil {
 			continue
 		}
@@ -256,7 +267,7 @@ func (s *Server) failover(ctx context.Context, req envelope.Request, f limitFact
 		}
 		s.record(ctx, "moved", moved.ID, moved.TraceID, "relay", store.DetailJSON(map[string]any{"from": from, "to": to, "reason": reason}))
 		note := fmt.Sprintf("%s is out of messages until %s; %s took your request. %s starts without any earlier conversation you had with %s, so this request has only its own text. Do not send it again.",
-			from, utcClock(until, now), to, to, from)
+			from, client.UTCClock(until, now), to, to, from)
 		s.noteAndTell(ctx, moved, noteMoved, int64(len(moved.MovedFrom)), note, now)
 		s.hub.notify(requestKey(moved.ID))
 		s.hub.notify(inboxKey(to))
@@ -265,12 +276,15 @@ func (s *Server) failover(ctx context.Context, req envelope.Request, f limitFact
 		}
 		return failoverOutcome{moved: true, req: moved, until: until}, nil
 	}
+	if !claimed && !heldUntil.IsZero() && heldUntil.UnixMilli() >= until.UnixMilli() {
+		return failoverOutcome{req: req, until: until}, nil
+	}
 	held, err := s.store.HoldBack(ctx, req.ID, from, until, claimed)
 	if err != nil {
 		return failoverOutcome{}, err
 	}
 	note := fmt.Sprintf("%s is out of messages until %s and no other web chat teammate can take this request now, so it waits and goes to %s then. If it can't wait, cancel it and ask another teammate.",
-		from, utcClock(until, now), from)
+		from, client.UTCClock(until, now), from)
 	s.noteAndTell(ctx, held, noteLimitWait, until.UnixMilli(), note, now)
 	if claimed {
 		s.hub.notify(requestKey(held.ID))
@@ -283,16 +297,25 @@ func (s *Server) failover(ctx context.Context, req envelope.Request, f limitFact
 // back, and the request as it now stands is returned with true when it
 // moved (the new target is already woken).
 func (s *Server) failoverQueued(ctx context.Context, req envelope.Request) (envelope.Request, bool) {
-	f, limited, err := s.failoverFacts(ctx)
+	// Most asks are not to a web chat teammate; they skip the roster read.
+	to, _, err := s.dir.Agent(ctx, req.To)
+	if err != nil {
+		log.Printf("failover %s: %v", req.ID, err)
+		return req, false
+	}
+	if !onboard.IsWebChatKind(to.Kind) {
+		return req, false
+	}
+	f, _, err := s.failoverFacts(ctx)
 	if err != nil {
 		log.Printf("failover %s: %v", req.ID, err)
 		return req, false
 	}
 	until := f.limited[req.To]
-	if !limited || until.IsZero() || failoverIneligible(req, false, f.kinds[req.From], f.kinds[req.To]) != "" {
+	if until.IsZero() || failoverIneligible(req, false, f.kinds[req.From], f.kinds[req.To]) != "" {
 		return req, false
 	}
-	out, err := s.failover(ctx, req, f, until, false, "limited")
+	out, err := s.failover(ctx, req, f, until, time.Time{}, false)
 	if err != nil {
 		if !errors.Is(err, store.ErrWrongState) {
 			log.Printf("failover %s: %v", req.ID, err)
@@ -327,7 +350,7 @@ func (s *Server) failoverSweep(ctx context.Context) {
 			if failoverIneligible(c.Request, c.Claimed, f.kinds[c.Request.From], f.kinds[name]) != "" {
 				continue
 			}
-			if _, err := s.failover(ctx, c.Request, f, until, false, "limited"); err != nil && !errors.Is(err, store.ErrWrongState) {
+			if _, err := s.failover(ctx, c.Request, f, until, c.DeliverAfter, false); err != nil && !errors.Is(err, store.ErrWrongState) {
 				log.Printf("failover sweep %s: %v", c.Request.ID, err)
 			}
 		}
@@ -339,8 +362,7 @@ func (s *Server) failoverSweep(ctx context.Context) {
 // <reset time>}. Only the claimant may hand an ask back, under its live
 // claim. The reset time is capped at the limit the agent last reported,
 // and an agent that reported none gets 409. An ask that may not move gets
-// 409 and stays claimed, so the agent answers it as it did before
-// failover. An eligible one moves, or with nowhere to go is requeued on
+// 409 and stays claimed, so the agent answers it itself. An eligible one moves, or with nowhere to go is requeued on
 // its target, held back until the reset.
 func (s *Server) handleHandback(w http.ResponseWriter, r *http.Request) {
 	name := s.agent(w, r)
@@ -361,7 +383,7 @@ func (s *Server) handleHandback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	now := s.cfg.Now()
-	if err == nil && (in.Reason != "limited" || !in.Until.After(now) || in.Until.After(now.Add(MaxWebLimit))) {
+	if err == nil && (in.Reason != envelope.WebLimited || !in.Until.After(now) || in.Until.After(now.Add(MaxWebLimit))) {
 		err = errors.New(`a handback needs reason "limited" and an until within 8 days`)
 	}
 	if err != nil {
@@ -400,7 +422,7 @@ func (s *Server) handleHandback(w http.ResponseWriter, r *http.Request) {
 	if until.After(reported) {
 		until = reported
 	}
-	out, err := s.failover(r.Context(), req, f, until, true, "handed back")
+	out, err := s.failover(r.Context(), req, f, until, time.Time{}, true)
 	if err != nil {
 		writeErr(w, statusFor(err), err)
 		return

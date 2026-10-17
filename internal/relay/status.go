@@ -49,7 +49,7 @@ type agentStatus struct {
 // idle or offline by whether the agent is polling.
 func computeStatus(f statusFacts, now, quietUntil time.Time) agentStatus {
 	if f.online && f.target.LimitedUntil.After(now) {
-		return agentStatus{status: client.StatusLimited, reason: "until " + utcClock(f.target.LimitedUntil, now)}
+		return agentStatus{status: client.StatusLimited, reason: "until " + client.UTCClock(f.target.LimitedUntil, now)}
 	}
 	if !now.Before(quietUntil) {
 		if reason := stuckReason(f, now); reason != "" {

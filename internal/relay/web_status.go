@@ -35,7 +35,7 @@ func (s *Server) handleWebStatus(w http.ResponseWriter, r *http.Request) {
 		validSite = validSite || in.Site == site
 	}
 	now := s.cfg.Now()
-	validState := in.State == "signed_out" || in.State == "authenticated"
+	validState := in.State == envelope.WebSignedOut || in.State == envelope.WebAuthenticated
 	if in.State == envelope.WebLimited {
 		validState = in.Until.After(now) && !in.Until.After(now.Add(MaxWebLimit))
 	} else if !in.Until.IsZero() {

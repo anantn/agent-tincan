@@ -60,9 +60,11 @@ type webSite struct {
 	// limited).
 	planLimitCooldown time.Duration
 	// limitText is how the site words its usage limit in the page's
-	// alert and status regions (detectLimit). Empty for a site whose
-	// wording has not been captured live: its limits are then seen only
-	// as a 429 with Retry-After or, on Grok, a plan-limit answer.
+	// alert and status regions (detectLimit). A rule is written only from
+	// wording captured live; a site without one sees its limits only as a
+	// 429 with Retry-After or, on Grok, a plan-limit answer read from its
+	// answer stream (grokLimitText). ChatGPT and Gemini usually move the
+	// owner to a smaller model and answer on, which is not a limit.
 	limitText []limitRule
 	// canonID, when set, turns a conversation id in any of the site's
 	// forms into the one form every store (per-asker state, used list,
@@ -167,10 +169,6 @@ var webSites = []*webSite{
 		},
 		nodes:    chatgptNodes,
 		convPath: convURLPattern,
-		// limitText: none yet. ChatGPT usually moves the owner to a
-		// smaller model and answers on, which is not a limit; its
-		// out-of-messages wording must be captured live before a rule
-		// is written.
 	},
 	{
 		source:        SourceClaudeAI,
@@ -205,9 +203,6 @@ var webSites = []*webSite{
 		convPath:          grokConvPath,
 		noteMissingImages: true,
 		planLimitCooldown: DefaultPlanLimitCooldown,
-		// limitText: none yet; Grok's plan limit is read from its
-		// answer stream (grokLimitText). Page wording must be captured
-		// live before a rule is written.
 	},
 	{
 		source:                SourceGemini,
@@ -227,9 +222,6 @@ var webSites = []*webSite{
 		canonID:         geminiCanonicalID,
 		noteLostImages:  true,
 		blockedCooldown: DefaultBlockedCooldown,
-		// limitText: none yet. Gemini usually moves the owner to a
-		// smaller model, which is not a limit; its out-of-messages
-		// wording must be captured live before a rule is written.
 	},
 	{
 		source:   SourcePerplexity,
@@ -247,7 +239,6 @@ var webSites = []*webSite{
 		blockedCooldown: DefaultBlockedCooldown,
 		webOnly:         true,
 		sources:         true,
-		// limitText: none yet; wording must be captured live.
 	},
 	{
 		source:   SourceCopilot,
@@ -268,7 +259,6 @@ var webSites = []*webSite{
 		listInTab:       true,
 		notLoggedIn:     copilotNotLoggedIn,
 		sources:         true,
-		// limitText: none yet; wording must be captured live.
 	},
 	{
 		source:   SourceDots,

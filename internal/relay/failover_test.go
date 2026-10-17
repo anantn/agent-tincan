@@ -106,7 +106,7 @@ func TestFailoverMovesQueuedAsk(t *testing.T) {
 	if res.Request.To != "muse" || res.Request.From != "instinct" || !slices.Equal(res.Request.Chain, []string{"instinct"}) || res.Status != envelope.StatusQueued {
 		t.Fatalf("request = %+v %s", res.Request, res.Status)
 	}
-	want := "grokbot is out of messages until " + utcClock(until, clk.Now()) + "; muse took your request"
+	want := "grokbot is out of messages until " + client.UTCClock(until, clk.Now()) + "; muse took your request"
 	if res.RelayNote == nil || !strings.Contains(res.RelayNote.Note, want) || !strings.Contains(res.RelayNote.Note, "without any earlier conversation") {
 		t.Fatalf("note = %+v", res.RelayNote)
 	}
@@ -148,7 +148,7 @@ func TestFailoverHandbackMoves(t *testing.T) {
 }
 
 // AE2: a council member ask does not move; its handback gets 409 and it is
-// still the limited agent's to answer, which fails it as before.
+// still the limited agent's to answer, which fails it.
 func TestFailoverCouncilAskStays(t *testing.T) {
 	h, clk := failoverHarness(t)
 	if ok, err := h.st.SetAgentKind(t.Context(), "instinct", "council"); !ok || err != nil {

@@ -456,5 +456,10 @@ type WebStatus struct {
 	Until      time.Time `json:"until,omitzero"`
 }
 
-// WebLimited is the WebStatus state of a site that is out of messages.
-const WebLimited = "limited"
+// The WebStatus states: signed in, signed out, and signed in but out of
+// messages.
+const (
+	WebAuthenticated = "authenticated"
+	WebSignedOut     = "signed_out"
+	WebLimited       = "limited"
+)
