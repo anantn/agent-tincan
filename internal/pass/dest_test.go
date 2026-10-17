@@ -99,6 +99,25 @@ func TestReadLatestAndByID(t *testing.T) {
 	}
 }
 
+// The newest chat is checked against the window once it is read, for
+// lists that carry no dates; a chat named by id is the owner's choice.
+func TestReadNewestOutsideWindow(t *testing.T) {
+	old := chat(1)
+	old.ID, old.UpdatedAt = "stale", time.Now().Add(-45*24*time.Hour)
+	r := &fakeReader{src: history.SourceCopilot, convs: []history.Conversation{old}}
+	if _, err := Read(t.Context(), r, "", history.Window{}); err == nil || !strings.Contains(err.Error(), "lookup window") {
+		t.Fatalf("stale newest = %v", err)
+	}
+	if c, err := Read(t.Context(), r, "stale", history.Window{}); err != nil || c.ID != "stale" {
+		t.Fatalf("by id = %+v, %v", c, err)
+	}
+	undated := chat(1)
+	r = &fakeReader{src: history.SourceCopilot, convs: []history.Conversation{undated}}
+	if _, err := Read(t.Context(), r, "", history.Window{}); err != nil {
+		t.Fatalf("undated newest = %v", err)
+	}
+}
+
 // NewConversation finds the destination's footer: the last line naming
 // its conversation, so a footer-shaped line in the answer above it never
 // wins.

@@ -75,7 +75,8 @@ func agentSite(a *client.AgentInfo) history.Source {
 // window admits. Pack, not the reader, decides what the seed leaves out.
 func Read(ctx context.Context, r history.Reader, id string, w history.Window) (history.Conversation, error) {
 	src := r.Source()
-	if id == "" {
+	newest := id == ""
+	if newest {
 		page, err := r.List(ctx, 1, history.Options{Window: w})
 		if err != nil {
 			return history.Conversation{}, err
@@ -96,7 +97,20 @@ func Read(ctx context.Context, r history.Reader, id string, w history.Window) (h
 	if len(page.Conversations) == 0 {
 		return history.Conversation{}, history.ErrNotFound
 	}
-	return page.Conversations[0], nil
+	c := page.Conversations[0]
+	// Some lists (Copilot's) carry no dates, so the newest entry is checked
+	// against the window once the read has its times. A chat named by id
+	// is the owner's explicit choice and is not.
+	if newest {
+		maxAge := w.MaxAge
+		if maxAge <= 0 {
+			maxAge = history.DefaultWindow().MaxAge
+		}
+		if u := lastUpdate(c); !u.IsZero() && u.Before(time.Now().Add(-maxAge)) {
+			return history.Conversation{}, fmt.Errorf("no %s conversations to pass in the lookup window: the newest was last updated %s", history.SourceLabel(src), u.UTC().Format("2006-01-02"))
+		}
+	}
+	return c, nil
 }
 
 // footerID is a conversation id as a web agent's footer prints it.

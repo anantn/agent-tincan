@@ -353,12 +353,7 @@ func InWindow(c history.Conversation, w history.Window, now time.Time) error {
 	if w.MaxAge <= 0 {
 		w.MaxAge = history.DefaultWindow().MaxAge
 	}
-	updated := c.UpdatedAt
-	for _, m := range c.Messages {
-		if m.Time.After(updated) {
-			updated = m.Time
-		}
-	}
+	updated := lastUpdate(c)
 	if updated.IsZero() {
 		return errors.New("the chat's last update time could not be read, so it cannot be checked against the owner's history window")
 	}
@@ -366,6 +361,18 @@ func InWindow(c history.Conversation, w history.Window, now time.Time) error {
 		return fmt.Errorf("the chat was last updated %s, outside the owner's history window of %d days", updated.UTC().Format("2006-01-02"), int(w.MaxAge.Hours()/24))
 	}
 	return nil
+}
+
+// lastUpdate is c's last update time: its own, or its newest message's
+// when that is later. Zero when neither could be read.
+func lastUpdate(c history.Conversation) time.Time {
+	updated := c.UpdatedAt
+	for _, m := range c.Messages {
+		if m.Time.After(updated) {
+			updated = m.Time
+		}
+	}
+	return updated
 }
 
 // siteOf is the site of the web chat agent to on the roster, "" when it is
