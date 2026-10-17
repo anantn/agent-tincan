@@ -249,6 +249,10 @@ type Target struct {
 	Listening bool `json:"listening,omitempty"`
 }
 
+// WakeViaSocket is Target.WakeVia for a recipient one of whose sessions
+// wakes through its own messaging socket.
+const WakeViaSocket = "socket"
+
 // WakeOK is Target.WakeResult for a wake the agent's platform accepted.
 // A wake sent on a fallback path adds a marker: "ok (fallback 1: email)".
 const WakeOK = "ok"

@@ -756,7 +756,7 @@ func (s *Server) wakeVia(agent string) (via string, listening bool) {
 	defer s.mu.Unlock()
 	for _, t := range s.socketWake[agent] {
 		if now.Sub(t) < SessionGrace {
-			via = "socket"
+			via = envelope.WakeViaSocket
 			break
 		}
 	}

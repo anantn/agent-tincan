@@ -113,11 +113,11 @@ func listenHint(to string, t *envelope.Target) string {
 		return ""
 	}
 	switch t.WakeVia {
-	case "socket", "channel":
+	case envelope.WakeViaSocket, "channel":
 		if !t.Listening {
 			return to + " is not connected; the request waits until a session opens.\n"
 		}
-		if t.WakeVia == "socket" {
+		if t.WakeVia == envelope.WakeViaSocket {
 			return to + " is listening now; a session will be prompted when it is idle.\n"
 		}
 		return to + " is listening now; a session started without channels may not see it until its next turn.\n"

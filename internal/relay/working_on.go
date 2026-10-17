@@ -96,6 +96,9 @@ func (s *Server) currentWorkingOn(agent string, now time.Time) (string, int) {
 	live := 0
 	for k, e := range s.workingOn[agent] {
 		if now.Sub(e.at) >= SessionGrace {
+			// A session that went away without a DELETE leaves nothing
+			// behind once its line has lapsed.
+			delete(s.workingOn[agent], k)
 			continue
 		}
 		live++

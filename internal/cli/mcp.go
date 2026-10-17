@@ -73,7 +73,11 @@ default.`,
 			if !channel {
 				ctx, cancel := context.WithCancel(cmd.Context())
 				defer cancel()
-				if p := claudeSocketFromEnv(); wakeSocket && p != nil {
+				var p *claudeSocketPusher
+				if wakeSocket {
+					p = claudeSocketFromEnv()
+				}
+				if p != nil {
 					// The socket wake peeks, which keeps the session live.
 					shared := socketShared{dir: socketWakeDir(), agent: cfg.Agent}
 					timing := socketWakeTiming{keepalive: sessionKeepalive, retry: socketRetryAfter}

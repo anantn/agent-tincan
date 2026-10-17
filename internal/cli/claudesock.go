@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"github.com/mvanhorn/agent-tincan/internal/history"
 )
 
 // claudeSocketWriteTimeout bounds one push: the session's socket is local,
@@ -57,7 +59,7 @@ func newClaudeSocketPusher(getenv func(string) string, ppid int) (*claudeSocketP
 	p := &claudeSocketPusher{
 		socket:   getenv("CLAUDE_CODE_MESSAGING_SOCKET"),
 		token:    getenv("CLAUDE_CODE_MESSAGING_TOKEN"),
-		registry: filepath.Join(claudeConfigDir(getenv), "sessions", strconv.Itoa(ppid)+".json"),
+		registry: filepath.Join(history.ClaudeConfigDir(getenv), "sessions", strconv.Itoa(ppid)+".json"),
 		ppid:     ppid,
 		ready:    make(chan struct{}),
 	}
@@ -78,18 +80,6 @@ func newClaudeSocketPusher(getenv func(string) string, ppid int) (*claudeSocketP
 	p.verified = true
 	close(p.ready)
 	return p, nil
-}
-
-// claudeConfigDir is $CLAUDE_CONFIG_DIR, or ~/.claude when it is unset, the
-// same directory the Claude Code history reader uses.
-func claudeConfigDir(getenv func(string) string) string {
-	if dir := getenv("CLAUDE_CONFIG_DIR"); dir != "" {
-		return dir
-	}
-	if h, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(h, ".claude")
-	}
-	return ""
 }
 
 // session reads the parent session's registry file. It reads the file on

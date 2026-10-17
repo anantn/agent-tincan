@@ -34,13 +34,19 @@ type ClaudeCode struct {
 // NewClaudeCode returns a reader for $CLAUDE_CONFIG_DIR/projects or
 // ~/.claude/projects.
 func NewClaudeCode() *ClaudeCode {
-	dir := os.Getenv("CLAUDE_CONFIG_DIR")
-	if dir == "" {
-		if h, err := os.UserHomeDir(); err == nil {
-			dir = filepath.Join(h, ".claude")
-		}
+	return &ClaudeCode{Root: filepath.Join(ClaudeConfigDir(os.Getenv), "projects"), ScratchDir: DefaultScratchDir()}
+}
+
+// ClaudeConfigDir is Claude Code's config directory: $CLAUDE_CONFIG_DIR as
+// getenv reads it, else ~/.claude, or "" when there is no home directory.
+func ClaudeConfigDir(getenv func(string) string) string {
+	if dir := getenv("CLAUDE_CONFIG_DIR"); dir != "" {
+		return dir
 	}
-	return &ClaudeCode{Root: filepath.Join(dir, "projects"), ScratchDir: DefaultScratchDir()}
+	if h, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(h, ".claude")
+	}
+	return ""
 }
 
 // Source implements Reader.

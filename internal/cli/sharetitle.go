@@ -41,7 +41,7 @@ type titleSharer struct {
 // Claude Code process that started this server, which the socket wake also
 // reads; without one it falls back to CLAUDE_CODE_SESSION_ID.
 func newClaudeTitleSharer(r workingOnReporter, getenv func(string) string, ppid int) *titleSharer {
-	dir := claudeConfigDir(getenv)
+	dir := history.ClaudeConfigDir(getenv)
 	registry := filepath.Join(dir, "sessions", strconv.Itoa(ppid)+".json")
 	cc := &history.ClaudeCode{Root: filepath.Join(dir, "projects")}
 	return &titleSharer{

@@ -83,23 +83,22 @@ func pushSocket(ctx context.Context, r *client.Relay, t socketTarget, shared soc
 			continue
 		}
 		backoff = time.Second
+		// settle counts failed writes in a row; a write that lands resets
+		// the count.
+		settle := func(tried bool, err error) bool {
+			switch {
+			case err != nil:
+				fails++
+				log.Printf("tincan socket wake: push: %v", err)
+			case tried:
+				fails = 0
+			}
+			return fails >= socketFailLimit
+		}
 		if t.idle() {
 			mine, rest := splitOwn(r, w)
-			for _, n := range []func() (bool, error){
-				func() (bool, error) { return pushOwn(ctx, t, mine, own) },
-				func() (bool, error) { return pushShared(ctx, t, rest, shared) },
-			} {
-				tried, err := n()
-				switch {
-				case err != nil:
-					fails++
-					log.Printf("tincan socket wake: push: %v", err)
-					if fails >= socketFailLimit {
-						return errSocketFailing
-					}
-				case tried:
-					fails = 0
-				}
+			if settle(pushOwn(ctx, t, mine, own)) || settle(pushShared(ctx, t, rest, shared)) {
+				return errSocketFailing
 			}
 		}
 		if w.Total > 0 {
@@ -178,9 +177,16 @@ func pushShared(ctx context.Context, t socketTarget, w client.Waiting, shared so
 	for _, k := range keys {
 		listed[k] = true
 	}
+	changed := false
 	for k, at := range rec {
 		if !listed[k] && now.Sub(at) >= socketRecordKeep {
 			delete(rec, k)
+			changed = true
+		}
+	}
+	save := func() {
+		if changed {
+			shared.write(rec)
 		}
 	}
 	fresh := w
@@ -205,18 +211,19 @@ func pushShared(ctx context.Context, t socketTarget, w client.Waiting, shared so
 	}
 	fresh.Total = fresh.Queued + len(fresh.Replies)
 	if fresh.Total == 0 {
-		shared.write(rec)
+		save()
 		return false, nil
 	}
 	n := socketNotice(fresh)
 	if err := t.Push(ctx, n.content, n.meta); err != nil {
-		shared.write(rec)
+		save()
 		return true, err
 	}
 	for _, k := range n.keys {
 		rec[k] = now
 	}
-	shared.write(rec)
+	changed = true
+	save()
 	return true, nil
 }
 
