@@ -479,7 +479,7 @@ func TestTwoGatewayAgentsKeepSeparateTokens(t *testing.T) {
 // A gateway agent uses the room tools only for rooms it is a member of.
 func TestGatewayRoomTools(t *testing.T) {
 	e := setup(t)
-	code, _, err := e.conn.Connect(context.Background(), "chatgpt")
+	code, _, err := e.conn.Connect(context.Background(), "chatgpt", false)
 	if err != nil {
 		t.Fatal(err)
 	}

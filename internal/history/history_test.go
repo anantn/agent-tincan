@@ -2,6 +2,7 @@ package history
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -354,5 +355,25 @@ func TestConversationMessagesWhole(t *testing.T) {
 	}
 	if c := conversationMessages(th, false, true); len(c.Messages) != 2*MaxConversationMessages || c.Messages[0].Text != "p0" {
 		t.Fatalf("whole read = %d messages from %q", len(c.Messages), c.Messages[0].Text)
+	}
+}
+
+// The local CLI readers (Cursor, Copilot CLI, Gemini CLI, OpenCode) honor
+// Options.Whole too, so a pass from one of them packs the whole chat.
+func TestLocalCLIConversationWhole(t *testing.T) {
+	var turns []turn
+	for i := range MaxConversationMessages {
+		turns = append(turns, turn{prompt: Message{Role: RoleUser, Text: fmt.Sprintf("p%d", i)}, reply: Message{Text: "r"}})
+	}
+	s := cliStore{source: SourceCursorCLI, wakeDir: t.TempDir(), scratchDir: t.TempDir(),
+		sessions: fromCandidates(func(context.Context) ([]cliSession, error) {
+			return []cliSession{{id: "c1", updated: time.Now(), load: func() ([]turn, string, error) { return turns, "", nil }}}, nil
+		})}
+	q := Query{Source: SourceCursorCLI, Mode: ModeConversation, ConversationID: "c1"}
+	for whole, want := range map[bool]int{false: MaxConversationMessages, true: 2 * MaxConversationMessages} {
+		page, err := s.Read(t.Context(), q, Options{Whole: whole})
+		if err != nil || len(page.Conversations) != 1 || len(page.Conversations[0].Messages) != want {
+			t.Fatalf("whole=%v: %+v %v", whole, len(page.Conversations), err)
+		}
 	}
 }

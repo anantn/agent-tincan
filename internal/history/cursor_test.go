@@ -204,7 +204,7 @@ func TestCursorCLINoHistory(t *testing.T) {
 	if want := "no Cursor CLI history found in " + filepath.Join(home, "chats"); !errors.Is(err, ErrNoHistory) || !strings.Contains(err.Error(), want) {
 		t.Fatalf("err = %v, want %q", err, want)
 	}
-	if got := readFailure(Query{Source: SourceCursorCLI}, err); got != "No Cursor CLI history was found on this machine." {
+	if got := ReadFailure(Query{Source: SourceCursorCLI}, err); got != "No Cursor CLI history was found on this machine." {
 		t.Fatalf("reply = %q", got)
 	}
 }

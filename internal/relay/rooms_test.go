@@ -113,8 +113,8 @@ func TestRoomAdminOnly(t *testing.T) {
 }
 
 // Agents whose asks are held, and service agents, are refused with the
-// reason; a phone is a member; a web chat member is added with a warning
-// that the thread goes to its vendor.
+// reason; a phone and the Copilot and Cursor CLIs are members; a web chat
+// member is added with a warning that the thread goes to its vendor.
 func TestRoomMemberEligibility(t *testing.T) {
 	m := roomMesh(t)
 	admin := m.Client(t, "admin")
@@ -127,7 +127,7 @@ func TestRoomMemberEligibility(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.Server.SetPreparer(policy.New(m.Store, policy.Config{Approval: a}))
-	for name, kind := range map[string]string{"council": "council", "dot-web": "dot-web", "history": "history", "notes": "notes", "pass": "pass", "phone": "phone", "chatgpt-web": "chatgpt-web"} {
+	for name, kind := range map[string]string{"council": "council", "dot-web": "dot-web", "history": "history", "notes": "notes", "pass": "pass", "phone": "phone", "chatgpt-web": "chatgpt-web", "copilot-cli": "copilot-cli", "cursor-cli": "cursor-cli"} {
 		m.JoinOnMachineOf(t, "muse", name)
 		if _, err := m.Store.SetAgentKind(t.Context(), name, kind); err != nil {
 			t.Fatal(err)
@@ -140,6 +140,11 @@ func TestRoomMemberEligibility(t *testing.T) {
 	}
 	if res, err := client.AddRoomMember(t.Context(), admin, "launch", "phone"); err != nil || !res.Changed || res.Warning != "" {
 		t.Fatalf("phone = %+v %v", res, err)
+	}
+	for _, name := range []string{"copilot-cli", "cursor-cli"} {
+		if res, err := client.AddRoomMember(t.Context(), admin, "launch", name); err != nil || !res.Changed || res.Warning != "" {
+			t.Fatalf("%s = %+v %v", name, res, err)
+		}
 	}
 	res, err := client.AddRoomMember(t.Context(), admin, "launch", "chatgpt-web")
 	if err != nil || !res.Changed || !strings.Contains(res.Warning, "vendor") {

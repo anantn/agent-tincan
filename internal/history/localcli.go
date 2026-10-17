@@ -159,7 +159,7 @@ func (s cliStore) read(ctx context.Context, cands []cliSession, q Query, opts Op
 				return Page{}, err
 			}
 			if ok {
-				return Page{Conversations: []Conversation{conversationMessages(th, false)}, Window: effectiveWindow(s.window, opts)}, nil
+				return Page{Conversations: []Conversation{conversationMessages(th, false, opts.Whole)}, Window: effectiveWindow(s.window, opts)}, nil
 			}
 		}
 		return Page{}, fmt.Errorf("%s: %w: %s", s.source, ErrNotFound, q.ConversationID)
