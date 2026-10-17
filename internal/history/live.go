@@ -173,7 +173,7 @@ func (l *live) Read(ctx context.Context, q Query, opts Options) (Page, error) {
 		if err != nil {
 			return Page{}, err
 		}
-		out := []Conversation{conversationMessages(th, q.wantsImages())}
+		out := []Conversation{conversationMessages(th, q.wantsImages(), opts.Whole)}
 		return Page{Conversations: l.resolve(ctx, out), Window: w}, nil
 	}
 	owned := l.agentOwned()

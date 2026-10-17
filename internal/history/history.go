@@ -217,6 +217,9 @@ type Options struct {
 	// then to DefaultWindow. Only the owner sets it (a CLI flag or the
 	// history service's window file); nothing in a request can.
 	Window Window
+	// Whole reads a ModeConversation result whole, past
+	// MaxConversationMessages: a pass packs the whole chat into its seed.
+	Whole bool
 }
 
 // Limit says why a page may be missing conversations.
@@ -728,14 +731,14 @@ func sortHits[T any](s []T, less func(a, b int) bool) {
 }
 
 // conversationMessages renders every turn of th, newest messages kept
-// under MaxConversationMessages.
-func conversationMessages(th thread, withImages bool) Conversation {
+// under MaxConversationMessages unless whole.
+func conversationMessages(th thread, withImages, whole bool) Conversation {
 	c := th.conv
 	c.Messages = nil
 	for _, t := range th.turns {
 		c.Messages = append(c.Messages, t.messages(withImages)...)
 	}
-	if len(c.Messages) > MaxConversationMessages {
+	if !whole && len(c.Messages) > MaxConversationMessages {
 		c.Messages = c.Messages[len(c.Messages)-MaxConversationMessages:]
 	}
 	out := []Conversation{c}

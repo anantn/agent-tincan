@@ -474,7 +474,7 @@ func (c *Codex) Read(ctx context.Context, q Query, opts Options) (Page, error) {
 			if !ok {
 				break
 			}
-			return Page{Conversations: []Conversation{conversationMessages(th, q.wantsImages())}, Window: effectiveWindow(c.Window, opts)}, nil
+			return Page{Conversations: []Conversation{conversationMessages(th, q.wantsImages(), opts.Whole)}, Window: effectiveWindow(c.Window, opts)}, nil
 		}
 		return Page{}, fmt.Errorf("codex: %w: %s", ErrNotFound, q.ConversationID)
 	}

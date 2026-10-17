@@ -70,8 +70,9 @@ func agentSite(a *client.AgentInfo) history.Source {
 	return ""
 }
 
-// Read reads the conversation id from r whole, or with id "" the newest
-// conversation the owner's window admits.
+// Read reads the conversation id from r whole, past the history
+// reader's message cap, or with id "" the newest conversation the owner's
+// window admits. Pack, not the reader, decides what the seed leaves out.
 func Read(ctx context.Context, r history.Reader, id string, w history.Window) (history.Conversation, error) {
 	src := r.Source()
 	if id == "" {
@@ -88,7 +89,7 @@ func Read(ctx context.Context, r history.Reader, id string, w history.Window) (h
 	if err := q.Validate(); err != nil {
 		return history.Conversation{}, err
 	}
-	page, err := r.Read(ctx, q, history.Options{Window: w})
+	page, err := r.Read(ctx, q, history.Options{Window: w, Whole: true})
 	if err != nil {
 		return history.Conversation{}, err
 	}

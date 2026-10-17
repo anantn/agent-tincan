@@ -67,11 +67,21 @@ func loadPassed(path string) (map[string]time.Time, error) {
 // the list at path and removes it. A legacy list that cannot be read, or
 // a site list that cannot be read or written, is an error, so nothing is
 // continued until the owner fixes it. A legacy list left behind when the
-// removal fails is merged again on the next load.
+// removal fails is merged again on the next load. It holds the site
+// list's lock across the merge.
 func migratePassed(path, legacy string) error {
 	if legacy == "" || legacy == path {
 		return nil
 	}
+	if _, err := os.Stat(legacy); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	unlock, err := lockList(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	// Another agent may have merged it while this one waited.
 	if _, err := os.Stat(legacy); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -96,11 +106,17 @@ func migratePassed(path, legacy string) error {
 }
 
 // recordPassed adds id to the passed list at path (0600 in a 0700
-// directory).
+// directory). It holds the list's lock across the read and write, so
+// agents serving the same site never drop each other's ids.
 func recordPassed(path, id string, now time.Time) error {
 	if !validNativeID(id) {
 		return fmt.Errorf("invalid conversation id %q", id)
 	}
+	unlock, err := lockList(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	convs, err := loadPassed(path)
 	if err != nil {
 		return err

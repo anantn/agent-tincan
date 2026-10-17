@@ -50,6 +50,7 @@ type fakeReader struct {
 	src   history.Source
 	convs []history.Conversation
 	reads int
+	opts  history.Options
 }
 
 func (f *fakeReader) Source() history.Source { return f.src }
@@ -63,8 +64,9 @@ func (f *fakeReader) List(_ context.Context, count int, _ history.Options) (hist
 	return p, nil
 }
 
-func (f *fakeReader) Read(_ context.Context, q history.Query, _ history.Options) (history.Page, error) {
+func (f *fakeReader) Read(_ context.Context, q history.Query, opts history.Options) (history.Page, error) {
 	f.reads++
+	f.opts = opts
 	for _, c := range f.convs {
 		if c.ID == q.ConversationID {
 			return history.Page{Conversations: []history.Conversation{c}}, nil
@@ -84,6 +86,9 @@ func TestReadLatestAndByID(t *testing.T) {
 	}
 	if c, err = Read(t.Context(), r, "older", history.Window{}); err != nil || c.ID != "older" {
 		t.Fatalf("by id = %+v, %v", c, err)
+	}
+	if !r.opts.Whole {
+		t.Fatal("the conversation was read capped, not whole")
 	}
 	empty := &fakeReader{src: history.SourceGrok}
 	if _, err := Read(t.Context(), empty, "", history.Window{}); err == nil || !strings.Contains(err.Error(), "no Grok conversations") {
