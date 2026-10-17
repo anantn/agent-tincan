@@ -52,7 +52,9 @@ type Capabilities struct {
 	// Handback is set by a relay that takes back an unsent ask from a
 	// web agent whose site is out of messages (POST
 	// /v1/requests/{id}/handback) and moves it to another web agent.
-	Handback           bool  `json:"handback,omitempty"`
+	Handback bool `json:"handback,omitempty"`
+	// Rooms is set by a relay that serves rooms (/v1/rooms).
+	Rooms              bool  `json:"rooms,omitempty"`
 	Attachments        bool  `json:"attachments"`
 	MaxAttachmentBytes int64 `json:"max_attachment_bytes,omitempty"`
 	MaxAttachments     int   `json:"max_attachments,omitempty"`
