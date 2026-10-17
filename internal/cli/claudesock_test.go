@@ -1,0 +1,245 @@
+package cli
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/mvanhorn/agent-tincan/internal/envelope"
+)
+
+const testMessagingToken = "tok-secret-0123456789"
+
+// claudeSockFixture is a fake Claude Code session: a short socket path and a
+// config dir holding the session registry for parent pid 4242.
+type claudeSockFixture struct {
+	socket, configDir string
+	ppid              int
+}
+
+func newClaudeSockFixture(t *testing.T) claudeSockFixture {
+	t.Helper()
+	// macOS caps unix socket paths near 104 bytes, so the socket lives in a
+	// short directory under /tmp rather than t.TempDir.
+	dir, err := os.MkdirTemp("/tmp", "tccs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return claudeSockFixture{socket: filepath.Join(dir, "s.sock"), configDir: filepath.Join(dir, "cfg"), ppid: 4242}
+}
+
+func (f claudeSockFixture) writeRegistry(t *testing.T, pid int, socket string) {
+	t.Helper()
+	sessions := filepath.Join(f.configDir, "sessions")
+	if err := os.MkdirAll(sessions, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(map[string]any{
+		"pid": pid, "sessionId": "sess-1", "status": "idle",
+		"procStart": "Sat Oct 17 04:55:23 2026", "messagingSocketPath": socket,
+	})
+	if err := os.WriteFile(filepath.Join(sessions, "4242.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f claudeSockFixture) getenv(token string) func(string) string {
+	return func(k string) string {
+		switch k {
+		case "CLAUDE_CODE_MESSAGING_SOCKET":
+			return f.socket
+		case "CLAUDE_CODE_MESSAGING_TOKEN":
+			return token
+		case "CLAUDE_CONFIG_DIR":
+			return f.configDir
+		}
+		return ""
+	}
+}
+
+// listen accepts one connection and sends back every line it reads.
+func (f claudeSockFixture) listen(t *testing.T) (net.Listener, <-chan []string) {
+	t.Helper()
+	ln, err := net.Listen("unix", f.socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	got := make(chan []string, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		var lines []string
+		sc := bufio.NewScanner(c)
+		for sc.Scan() {
+			lines = append(lines, sc.Text())
+		}
+		got <- lines
+	}()
+	return ln, got
+}
+
+func closed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
+
+func TestClaudeSocketPushWritesAuthThenUser(t *testing.T) {
+	f := newClaudeSockFixture(t)
+	f.writeRegistry(t, f.ppid, f.socket)
+	_, got := f.listen(t)
+	p, err := newClaudeSocketPusher(f.getenv(testMessagingToken), f.ppid)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if !closed(p.Ready()) {
+		t.Fatal("Ready not closed after verification passed")
+	}
+	req := envelope.Request{From: "alice", Body: "please rotate the staging keys"}
+	content := channelNotice(1, []string{req.From})
+	if err := p.Push(context.Background(), content, map[string]string{"count": "1"}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	var lines []string
+	select {
+	case lines = <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("listener got nothing")
+	}
+	if len(lines) != 2 {
+		t.Fatalf("got %d frames, want 2: %q", len(lines), lines)
+	}
+	var auth struct{ Type, Token string }
+	if err := json.Unmarshal([]byte(lines[0]), &auth); err != nil || auth.Type != "auth" || auth.Token != testMessagingToken {
+		t.Fatalf("auth frame = %s (%v)", lines[0], err)
+	}
+	var user struct {
+		Type    string
+		Message struct{ Role, Content string }
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &user); err != nil || user.Type != "user" || user.Message.Role != "user" {
+		t.Fatalf("user frame = %s (%v)", lines[1], err)
+	}
+	if user.Message.Content != content {
+		t.Fatalf("content = %q, want %q", user.Message.Content, content)
+	}
+	if strings.Contains(lines[1], req.Body) {
+		t.Fatalf("user frame carries the request body: %s", lines[1])
+	}
+}
+
+func TestClaudeSocketPushOmitsAuthWithoutToken(t *testing.T) {
+	f := newClaudeSockFixture(t)
+	f.writeRegistry(t, f.ppid, f.socket)
+	_, got := f.listen(t)
+	p, err := newClaudeSocketPusher(f.getenv(""), f.ppid)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if err := p.Push(context.Background(), channelNotice(2, nil), nil); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	lines := <-got
+	if len(lines) != 1 || !strings.Contains(lines[0], `"type":"user"`) {
+		t.Fatalf("frames = %q, want one user frame", lines)
+	}
+}
+
+func TestClaudeSocketVerifyRefusesMismatch(t *testing.T) {
+	cases := map[string]func(f claudeSockFixture, t *testing.T){
+		"no registry file": func(claudeSockFixture, *testing.T) {},
+		"other socket path": func(f claudeSockFixture, t *testing.T) {
+			f.writeRegistry(t, f.ppid, f.socket+".other")
+		},
+		"other pid": func(f claudeSockFixture, t *testing.T) {
+			f.writeRegistry(t, f.ppid+1, f.socket)
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newClaudeSockFixture(t)
+			setup(f, t)
+			p, err := newClaudeSocketPusher(f.getenv(testMessagingToken), f.ppid)
+			if err == nil {
+				t.Fatal("verification passed, want refusal")
+			}
+			if strings.Contains(err.Error(), testMessagingToken) {
+				t.Fatalf("error leaks the token: %v", err)
+			}
+			if closed(p.Ready()) {
+				t.Fatal("Ready closed although verification failed")
+			}
+		})
+	}
+}
+
+func TestClaudeSocketVerifyNeedsEnv(t *testing.T) {
+	f := newClaudeSockFixture(t)
+	f.writeRegistry(t, f.ppid, f.socket)
+	p, err := newClaudeSocketPusher(func(k string) string {
+		if k == "CLAUDE_CONFIG_DIR" {
+			return f.configDir
+		}
+		return ""
+	}, f.ppid)
+	if err == nil || closed(p.Ready()) {
+		t.Fatalf("verification without a socket env var: err=%v", err)
+	}
+}
+
+func TestClaudeSocketPushErrorNamesPathNotToken(t *testing.T) {
+	f := newClaudeSockFixture(t)
+	f.writeRegistry(t, f.ppid, f.socket)
+	ln, _ := f.listen(t)
+	p, err := newClaudeSocketPusher(f.getenv(testMessagingToken), f.ppid)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	ln.Close()
+	err = p.Push(context.Background(), channelNotice(1, nil), nil)
+	if err == nil {
+		t.Fatal("push to a closed listener succeeded")
+	}
+	if !strings.Contains(err.Error(), f.socket) {
+		t.Fatalf("error %q does not name the socket path", err)
+	}
+	if strings.Contains(err.Error(), testMessagingToken) {
+		t.Fatalf("error leaks the token: %v", err)
+	}
+}
+
+func TestClaudeSessionStatusRereadsRegistry(t *testing.T) {
+	f := newClaudeSockFixture(t)
+	f.writeRegistry(t, f.ppid, f.socket)
+	p, err := newClaudeSocketPusher(f.getenv(testMessagingToken), f.ppid)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	s, err := p.session()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Status != "idle" || s.SessionID != "sess-1" || s.ProcStart != "Sat Oct 17 04:55:23 2026" {
+		t.Fatalf("session = %+v", s)
+	}
+	path := filepath.Join(f.configDir, "sessions", "4242.json")
+	b, _ := os.ReadFile(path)
+	os.WriteFile(path, []byte(strings.Replace(string(b), `"idle"`, `"busy"`, 1)), 0o600)
+	if s, err = p.session(); err != nil || s.Status != "busy" {
+		t.Fatalf("after change: %+v, %v", s, err)
+	}
+}
