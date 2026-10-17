@@ -22,7 +22,8 @@ type workingOnReporter interface {
 
 // titleSharer reports the Claude Code session's title as this MCP server's
 // working-on line on the roster (tincan mcp --share-title). It reads only
-// the session's title, never its prompts.
+// only the session's title records, not its prompts; the title itself may
+// still echo a prompt when a hook names sessions from their first prompt.
 type titleSharer struct {
 	r workingOnReporter
 	// sessionID is the Claude Code session this server runs in, read on

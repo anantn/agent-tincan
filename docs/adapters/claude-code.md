@@ -67,7 +67,7 @@ Add `--share-title` to the server command to show each session's title on the ro
 claude mcp add --scope user agent-tincan -- tincan mcp --channel --share-title
 ```
 
-Teammates then see `working_on="Fix flaky relay test"` on this agent's `list_agents` and `tincan agents` line: the session's custom title, else the title Claude Code wrote for it, never your prompts. It works with or without `--channel`. Each server re-sends its title every 2 minutes and removes it when it exits; a window that stops without a clean exit drops off within 10 minutes. With several windows open the line shows the most recently refreshed title and a count of the others, such as `(+2)`. It is off by default, and every joined agent can read it, so leave it off if your session titles name things the team should not see.
+Teammates then see `working_on="Fix flaky relay test"` on this agent's `list_agents` and `tincan agents` line: the session's custom title, else the title Claude Code wrote for it. Only title records are read, not your prompts, but a title can still say what you asked: Claude Code's generated titles summarize the conversation, and a hook that names sessions from their first prompt turns that prompt into the custom title. It works with or without `--channel`. Each server re-sends its title every 2 minutes and removes it when it exits; a window that stops without a clean exit drops off within 10 minutes. With several windows open the line shows the most recently refreshed title and a count of the others, such as `(+2)`. It is off by default, and every joined agent can read it, so leave it off if your session titles name things the team should not see.
 
 ## Fallback: open a session in cmux
 
