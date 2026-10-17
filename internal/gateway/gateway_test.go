@@ -127,7 +127,7 @@ func (e *env) mcpSession(t *testing.T, tok string) *mcp.ClientSession {
 // AE8: ChatGPT logs in once with Matt's code, then asks Instinct something.
 func TestChatGPTConnectsAndAsks(t *testing.T) {
 	e := setup(t)
-	code, mcpURL, err := e.conn.Connect(context.Background(), "chatgpt")
+	code, mcpURL, err := e.conn.Connect(context.Background(), "chatgpt", false)
 	if err != nil || mcpURL != e.gw.URL+"/mcp" {
 		t.Fatalf("connect: %v %s", err, mcpURL)
 	}
@@ -162,7 +162,7 @@ func TestMCPNeedsAToken(t *testing.T) {
 
 func TestLoginCodeRules(t *testing.T) {
 	e := setup(t)
-	code, _, _ := e.conn.Connect(context.Background(), "chatgpt")
+	code, _, _ := e.conn.Connect(context.Background(), "chatgpt", false)
 	if _, resp := e.login(t, "WRNG-CODE"); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("wrong code: status %d", resp.StatusCode)
 	}
@@ -174,7 +174,7 @@ func TestLoginCodeRules(t *testing.T) {
 
 func TestBruteForceLockout(t *testing.T) {
 	e := setup(t)
-	code, _, _ := e.conn.Connect(context.Background(), "chatgpt")
+	code, _, _ := e.conn.Connect(context.Background(), "chatgpt", false)
 	for range 5 {
 		e.login(t, "BAAD-CODE")
 	}
@@ -185,7 +185,7 @@ func TestBruteForceLockout(t *testing.T) {
 
 func TestRemoveRevokesAccess(t *testing.T) {
 	e := setup(t)
-	code, _, _ := e.conn.Connect(context.Background(), "chatgpt")
+	code, _, _ := e.conn.Connect(context.Background(), "chatgpt", false)
 	tok, _ := e.login(t, code)
 	e.m.Client(t, "admin").Remove(context.Background(), "chatgpt")
 	req, _ := http.NewRequest("POST", e.gw.URL+"/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`))
@@ -251,7 +251,7 @@ func (e *env) refresh(t *testing.T, refreshToken, clientID string) (gateway.Toke
 // client that got it.
 func TestRefreshRotatesTokens(t *testing.T) {
 	e := setup(t)
-	code, _, _ := e.conn.Connect(context.Background(), "chatgpt")
+	code, _, _ := e.conn.Connect(context.Background(), "chatgpt", false)
 	s, _ := e.loginSession(t, code)
 	if s.RefreshToken == "" || s.ClientID == "" {
 		t.Fatalf("login left no refresh token or client_id: %+v", s)
@@ -426,11 +426,11 @@ func TestLoginPageNamesNoProduct(t *testing.T) {
 // attributed to its own agent, and removing one revokes only its tokens.
 func TestTwoGatewayAgentsKeepSeparateTokens(t *testing.T) {
 	e := setup(t)
-	gptCode, _, err := e.conn.Connect(context.Background(), "chatgpt")
+	gptCode, _, err := e.conn.Connect(context.Background(), "chatgpt", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sesCode, _, err := e.conn.Connect(context.Background(), "sesame")
+	sesCode, _, err := e.conn.Connect(context.Background(), "sesame", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,7 +479,7 @@ func TestTwoGatewayAgentsKeepSeparateTokens(t *testing.T) {
 // A gateway agent uses the room tools only for rooms it is a member of.
 func TestGatewayRoomTools(t *testing.T) {
 	e := setup(t)
-	code, _, err := e.conn.Connect(context.Background(), "chatgpt")
+	code, _, err := e.conn.Connect(context.Background(), "chatgpt", false)
 	if err != nil {
 		t.Fatal(err)
 	}

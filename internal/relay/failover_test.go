@@ -199,6 +199,8 @@ func TestFailoverIneligible(t *testing.T) {
 		"from dot-web":   {req: ask, from: "dot-web"},
 		"from council":   {req: ask, from: "council"},
 		"to a CLI":       {req: ask, to: "codex"},
+		"to copilot-cli": {req: ask, to: "copilot-cli"},
+		"to cursor-cli":  {req: ask, to: "cursor-cli"},
 		"to no kind":     {req: ask, to: "-"},
 		"to the council": {req: ask, to: "council"},
 	} {

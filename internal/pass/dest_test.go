@@ -19,6 +19,8 @@ func roster() []client.AgentInfo {
 		{Name: "chatgpt-web", Kind: "chatgpt-web", Online: true, Status: client.StatusIdle},
 		{Name: "claude-web", Kind: "claude-web", Online: true, Status: client.StatusIdle},
 		{Name: "codex", Kind: "codex", Online: true},
+		{Name: "copilot-cli", Kind: "copilot-cli", Online: true},
+		{Name: "cursor-cli", Kind: "cursor-cli", Online: true},
 		{Name: "dot-web", Kind: "dot-web", Online: true},
 		{Name: "gone-web", Kind: "gemini-web", Target: envelope.Target{SignedOutSite: "gemini.google.com"}},
 		{Name: "tired-web", Kind: "grok-web", Status: client.StatusLimited, Target: envelope.Target{LimitedUntil: now.Add(time.Hour)}},
@@ -33,11 +35,13 @@ func TestDestination(t *testing.T) {
 		t.Fatalf("claude-web = %q, %v", src, err)
 	}
 	for to, want := range map[string]string{
-		"codex":     "not a web chat teammate",
-		"dot-web":   "not a web chat teammate",
-		"nobody":    "no agent named nobody",
-		"gone-web":  "signed out",
-		"tired-web": "out of messages",
+		"codex":       "not a web chat teammate",
+		"copilot-cli": "not a web chat teammate",
+		"cursor-cli":  "not a web chat teammate",
+		"dot-web":     "not a web chat teammate",
+		"nobody":      "no agent named nobody",
+		"gone-web":    "signed out",
+		"tired-web":   "out of messages",
 	} {
 		if _, err := Destination(roster(), to, now); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v, want %q", to, err, want)
