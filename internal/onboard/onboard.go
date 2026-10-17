@@ -364,10 +364,18 @@ func isService(kind string) bool {
 	return kind == KindHistory || kind == KindNotes || kind == KindCouncil || isWebKind(kind)
 }
 
-// isWebKind reports whether kind is one of the web agents.
-func isWebKind(kind string) bool {
-	return kind == KindChatGPTWeb || kind == KindClaudeWeb || kind == KindGrokWeb || kind == KindGeminiWeb || kind == KindPerplexityWeb || kind == KindCopilotWeb || kind == KindDotWeb
-}
+// WebChatKinds are the six web chat teammates the relay moves an unsent
+// ask between when one's site is out of messages (failover). dot-web is a
+// web agent too, but it acts in the owner's connected apps, so it is not
+// one of them and isWebKind is not this list.
+var WebChatKinds = []string{KindChatGPTWeb, KindClaudeWeb, KindGrokWeb, KindGeminiWeb, KindPerplexityWeb, KindCopilotWeb}
+
+// IsWebChatKind reports whether kind is in WebChatKinds.
+func IsWebChatKind(kind string) bool { return slices.Contains(WebChatKinds, kind) }
+
+// isWebKind reports whether kind is one of the web agents: a web chat
+// kind or dot-web.
+func isWebKind(kind string) bool { return IsWebChatKind(kind) || kind == KindDotWeb }
 
 func agentBlock(d agentData) (AgentBlock, error) {
 	join, err := execute(templateFor("join."+d.Kind, "join.default"), d)

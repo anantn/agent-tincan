@@ -367,6 +367,10 @@ func TestGrokWebPlanLimitSetsGrokCooldown(t *testing.T) {
 	if got := g.closed(); len(got) != 1 {
 		t.Fatalf("closes %v", got)
 	}
+	// The plan limit is a usage limit: the agent reports itself limited.
+	if got := rig.agent.auth.latest; got.State != envelope.WebLimited || got.Until.IsZero() {
+		t.Fatalf("status = %+v", got)
+	}
 }
 
 // A finished answer that also carries a limit stream error is delivered

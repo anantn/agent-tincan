@@ -46,7 +46,7 @@ func (s *Store) needsInput(ctx context.Context, id, agent string, rep envelope.R
 		return envelope.Reply{}, err
 	}
 	if req.To != agent {
-		return envelope.Reply{}, ErrForbidden
+		return envelope.Reply{}, notTarget(req, agent)
 	}
 	if status != envelope.StatusClaimed || req.Kind != envelope.KindAsk || len(req.Exchanges) >= envelope.MaxExchanges {
 		return envelope.Reply{}, ErrWrongState
@@ -57,7 +57,7 @@ func (s *Store) needsInput(ctx context.Context, id, agent string, rep envelope.R
 		return envelope.Reply{}, err
 	}
 	res, err := tx.ExecContext(ctx, `UPDATE requests SET status = ?, exchanges = ?, lease_paused = 1, lease_until = 0, updated_at = ?, reply_seen_at = 0, reply_generation = reply_generation + 1
-		WHERE id = ? AND status = ? AND expires_at > ? AND lease_until > ?`, envelope.StatusNeedsInput, string(exchanges), now.UnixMilli(), id, envelope.StatusClaimed, now.UnixMilli(), now.UnixMilli())
+		WHERE id = ? AND to_agent = ? AND status = ? AND expires_at > ? AND lease_until > ?`, envelope.StatusNeedsInput, string(exchanges), now.UnixMilli(), id, agent, envelope.StatusClaimed, now.UnixMilli(), now.UnixMilli())
 	if err != nil {
 		return envelope.Reply{}, err
 	}

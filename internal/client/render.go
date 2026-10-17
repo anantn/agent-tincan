@@ -173,6 +173,27 @@ func clockTime(t, now time.Time) string {
 	return t.Format("Jan 2 15:04")
 }
 
+// UTCClock is t as "16:40 UTC", with the date when it is not now's day:
+// "Oct 2 16:40 UTC". The relay and a web agent write it into text another
+// agent reads, and neither knows that reader's zone, so it names UTC.
+func UTCClock(t, now time.Time) string {
+	t, now = t.UTC(), now.UTC()
+	if t.YearDay() == now.YearDay() && t.Year() == now.Year() {
+		return t.Format("15:04 UTC")
+	}
+	return t.Format("Jan 2 15:04 UTC")
+}
+
+// LimitNote is "out of messages until 14:00" (on the local clock) for a
+// web agent whose site's usage limit has not reset by now, and empty
+// otherwise.
+func (a AgentInfo) LimitNote(now time.Time) string {
+	if !a.LimitedUntil.After(now) {
+		return ""
+	}
+	return "out of messages until " + clockTime(a.LimitedUntil, now)
+}
+
 // UnansweredNote is "woken 12m ago, no check-in (webhook ok)" for an agent
 // the relay woke that has not checked in since, with the error in place of
 // ok when the wake failed, and empty otherwise.

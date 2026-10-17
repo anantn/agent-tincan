@@ -72,9 +72,10 @@ type AgentInfo struct {
 	Name             string `json:"name"`
 	Online           bool   `json:"online"`
 	// Status is the relay's one word for what the agent is doing (StatusBusy,
-	// StatusIdle, StatusStuck or StatusOffline), computed once on the relay
-	// so every surface shows the same thing. StatusReason says why a stuck
-	// agent is stuck ("claim lapsed"); BusyFor names the asker whose request
+	// StatusIdle, StatusStuck, StatusLimited or StatusOffline), computed once
+	// on the relay so every surface shows the same thing. StatusReason says
+	// why a stuck agent is stuck ("claim lapsed") or until when a limited
+	// one is limited ("until 14:00 UTC"); BusyFor names the asker whose request
 	// a busy agent holds and BusySince when it claimed it. They never carry
 	// request text. All are empty from relays that predate them.
 	Status       string    `json:"status,omitempty"`
@@ -123,12 +124,14 @@ type AgentInfo struct {
 
 // The statuses a relay reports in AgentInfo.Status. Busy means the agent
 // holds live claimed work or its host says it is working; stuck means work
-// waits on it and nothing is moving; idle and offline split the rest by
+// waits on it and nothing is moving; limited means a web agent's site is
+// out of messages until LimitedUntil; idle and offline split the rest by
 // whether it is polling now.
 const (
 	StatusBusy    = "busy"
 	StatusIdle    = "idle"
 	StatusStuck   = "stuck"
+	StatusLimited = "limited"
 	StatusOffline = "offline"
 )
 
@@ -276,6 +279,12 @@ type Relay struct {
 	// reply to its own ask from one the relay shows every session.
 	sentMu  sync.Mutex
 	sentIDs map[string]bool
+
+	// handbackAt is when Handback last read the relay's handback
+	// capability, and handbackOK what it said.
+	handbackMu sync.Mutex
+	handbackAt time.Time
+	handbackOK bool
 }
 
 // maxSentIDs bounds sentIDs. Past it the record starts over, and a reply
@@ -677,6 +686,69 @@ func (r *Relay) Watch(ctx context.Context, agent string) (WatchResult, error) {
 	var out WatchResult
 	err = r.call(ctx, r.api, "POST", "/v1/watches", map[string]string{"agent": agent}, &out)
 	return out, err
+}
+
+// HandbackResult is what the relay did with a handed-back request:
+// Outcome HandbackMoved, to the teammate To, or HandbackRequeued, back on
+// the caller's queue and not delivered again before Until.
+type HandbackResult struct {
+	Outcome string    `json:"outcome"`
+	To      string    `json:"to,omitempty"`
+	Until   time.Time `json:"until,omitzero"`
+}
+
+// The outcomes of a handback.
+const (
+	HandbackMoved    = "moved"
+	HandbackRequeued = "requeued"
+)
+
+// ErrHandbackUnsupported means the relay predates handbacks: the web agent
+// answers the request itself.
+var ErrHandbackUnsupported = errors.New("this relay does not take handbacks (upgrade the relay)")
+
+// handbackRecheck is how long a read of the relay's handback capability is
+// trusted before Handback reads it again (the relay may be upgraded).
+const handbackRecheck = 10 * time.Minute
+
+// Handback gives back request id, which the caller (a web agent) claimed
+// and did not send because its site is out of messages until until, so
+// the relay can move it to another web agent. A 409 means the request may
+// not move and is still the caller's to answer. It checks the relay's
+// capabilities first, at most every handbackRecheck, so an older relay is
+// refused with ErrHandbackUnsupported. A failed read is not kept.
+func (r *Relay) Handback(ctx context.Context, id string, until time.Time) (HandbackResult, error) {
+	ok, err := r.takesHandback(ctx)
+	if err != nil {
+		return HandbackResult{}, fmt.Errorf("check relay capabilities: %w", err)
+	}
+	if !ok {
+		return HandbackResult{}, ErrHandbackUnsupported
+	}
+	var out HandbackResult
+	err = r.call(ctx, r.api, "POST", "/v1/requests/"+url.PathEscape(id)+"/handback", map[string]any{"reason": envelope.WebLimited, "until": until.UTC()}, &out)
+	return out, err
+}
+
+// takesHandback reports whether the relay advertises handbacks, from a
+// read made within handbackRecheck when there is one.
+func (r *Relay) takesHandback(ctx context.Context) (bool, error) {
+	now := time.Now()
+	r.handbackMu.Lock()
+	if !r.handbackAt.IsZero() && now.Sub(r.handbackAt) < handbackRecheck {
+		ok := r.handbackOK
+		r.handbackMu.Unlock()
+		return ok, nil
+	}
+	r.handbackMu.Unlock()
+	caps, err := r.Capabilities(ctx)
+	if err != nil {
+		return false, err
+	}
+	r.handbackMu.Lock()
+	defer r.handbackMu.Unlock()
+	r.handbackAt, r.handbackOK = now, caps.Handback
+	return caps.Handback, nil
 }
 
 // Remove unbinds an agent (admin devices only).

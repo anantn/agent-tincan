@@ -377,3 +377,47 @@ func TestNonCouncilNotHeldWithoutApproval(t *testing.T) {
 		t.Fatalf("codex ask = status %q ttl %v, want delivered", req.Status, req.HoldTTL)
 	}
 }
+
+// A move runs the send checks against the new target without charging the
+// sender's rate: a target already in the chain, past the hop limit, gated
+// by approval.json or held by default for its kind is refused; any other
+// passes, even for a sender at its rate limit.
+func TestCheckMove(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "approval.json")
+	if err := os.WriteFile(path, []byte(`{"gate":{"grok-web":{"from":"*"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := LoadApproval(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFixture(t, Config{Approval: approval, PerMinute: 1})
+	ctx := context.Background()
+	for _, a := range []identity.Agent{{Name: "council", NodeID: "n1", Kind: "council"}, {Name: "gemini-web", NodeID: "n2", Kind: "gemini-web"}} {
+		if err := f.st.PutAgent(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req, err := f.send(t, "codex", "claude-web", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.send(t, "codex", "muse", ""); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("the rate limit is not reached: %v", err)
+	}
+	if err := f.pol.CheckMove(ctx, req, "gemini-web"); err != nil {
+		t.Fatalf("open target refused: %v", err)
+	}
+	for to, want := range map[string]int{"codex": http.StatusConflict, "grok-web": http.StatusConflict, "council": http.StatusConflict} {
+		err := f.pol.CheckMove(ctx, req, to)
+		var se *relay.StatusError
+		if !errors.As(err, &se) || se.Code != want {
+			t.Errorf("%s: %v", to, err)
+		}
+	}
+	long := req
+	long.Hop = DefaultHopLimit + 1
+	if err := f.pol.CheckMove(ctx, long, "gemini-web"); !errors.Is(err, ErrHopLimit) {
+		t.Fatalf("hop limit: %v", err)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mvanhorn/agent-tincan/internal/client"
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
 	"github.com/mvanhorn/agent-tincan/internal/identity"
 	"github.com/mvanhorn/agent-tincan/internal/store"
@@ -161,7 +162,7 @@ func (s *Server) ownerWakeNote(ctx context.Context, agent string, wk store.Wake,
 		}
 	}
 	return fmt.Sprintf("%s has not checked in after %d wakes in a row since %s (wake path: %s; last wake result: %s%s). Its requests are still queued. Run tincan wakes %s for its wake history. No reply needed.",
-		agent, wakes, utcClock(wk.At, now), s.wake.WakeMethod(agent), wk.Result, reply, agent)
+		agent, wakes, client.UTCClock(wk.At, now), s.wake.WakeMethod(agent), wk.Result, reply, agent)
 }
 
 // noteAndTell records note on req for kind and episode and, the first time
@@ -268,7 +269,7 @@ func (s *Server) wakeNote(agent string, wk store.Wake, online []string, now time
 	if !envelope.WakeAccepted(wk.Result) {
 		result = method + " failed: " + wk.Result
 	}
-	note := fmt.Sprintf("%s was woken at %s and has not checked in (%s). The request is still queued.", agent, utcClock(wk.At, now), result)
+	note := fmt.Sprintf("%s was woken at %s and has not checked in (%s). The request is still queued.", agent, client.UTCClock(wk.At, now), result)
 	return note + suggest(online, "If it can't wait, cancel it and ask")
 }
 
@@ -312,14 +313,4 @@ func (s *Server) noticeAsker(ctx context.Context, req envelope.Request, note str
 	}
 	s.record(ctx, "queued", n.ID, n.TraceID, "relay", store.DetailJSON(map[string]any{"wake_notice_for": req.ID, "to": n.To}))
 	s.noticeQueued(ctx, n)
-}
-
-// utcClock is t as "16:40 UTC", with the date when it is not now's day:
-// "Oct 2 16:40 UTC". The relay cannot know the reader's zone.
-func utcClock(t, now time.Time) string {
-	t, now = t.UTC(), now.UTC()
-	if t.YearDay() == now.YearDay() && t.Year() == now.Year() {
-		return t.Format("15:04 UTC")
-	}
-	return t.Format("Jan 2 15:04 UTC")
 }

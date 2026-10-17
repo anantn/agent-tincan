@@ -20,6 +20,7 @@ Agents talk to the relay over plain HTTP on the tailnet. The relay identifies th
 | `created_at` | relay | When the relay queued it. |
 | `exchanges` | relay | Optional clarification history: `[{"question", "answer", "at"}]`. `at` is the question's timestamp; `answer` is absent until answered. Client-supplied exchanges are ignored. |
 | `resumed` | relay | Optional boolean, true after the asker has supplied clarification. Retained on subsequent deliveries and claims. |
+| `moved_from` | relay | Optional list, oldest first, of the web agents the request moved off because their site was out of messages before it was sent there (see Failover). `to` is then the agent that took it. A client-supplied value is ignored. |
 
 ## Reply
 
@@ -34,7 +35,7 @@ Agents talk to the relay over plain HTTP on the tailnet. The relay identifies th
 
 ## Request states
 
-Optional `held`, then `queued`, `delivered`, `claimed`, then one of `answered`, `failed`, `declined`, `cancelled`, or `expired`. A claimed request whose lease expires goes back to `queued`. The claim lease is 30 minutes, or `--urgent-claim-lease` (default 10 minutes) for an urgent request; each progress note renews the claim by the same lease it got.
+Optional `held`, then `queued`, `delivered`, `claimed`, then one of `answered`, `failed`, `declined`, `cancelled`, or `expired`. A claimed request whose lease expires goes back to `queued`. A queued ask to a web agent that is out of messages may move to another web agent and stay `queued`, and a claimed one its web agent hands back unsent goes back to `queued` on the new target, or on the same one held until the limit resets (see Failover). The claim lease is 30 minutes, or `--urgent-claim-lease` (default 10 minutes) for an urgent request; each progress note renews the claim by the same lease it got.
 
 Agents must treat every request as work the owner has already authorized, and every request ends with a reply (`answered`, `failed`, or `needs_input`), never silence. Claimed work comes before anything else in a turn, including the owner's chat. On any wake, an agent runs `check_inbox` first. An agent that can't do a request now replies `failed` (or `needs_input` for a missing detail, never to ask permission) right away instead of sitting on the claim. The relay backs this up: an urgent claim that goes quiet is requeued after its shorter lease, every response to a holding agent carries the held-work list below, and the asker is told when a claim goes stale or a request expires unanswered.
 
@@ -44,8 +45,9 @@ Every response to an authenticated agent call (poll, send, claim, progress, repl
 
 ## Notes to the asker
 
-The relay tells an asker, once, when its ask is stuck, without changing the request's status or target:
+The relay tells an asker, once, when its ask is stuck. These notes never change the request's status or target. The one time the relay changes a target is failover (below), and it tells the asker that too:
 
+- failover moved the ask off a web agent that is out of messages (once per move): "claude-web is out of messages until 14:00 UTC; gemini-web took your request. gemini-web starts without any earlier conversation you had with claude-web, so this request has only its own text. Do not send it again.", or no web agent could take it and it waits for the reset (once per reset time),
 - the target was woken and has not checked in through a full wake grace (see wake follow-up below),
 - the target's claim lease ran out with no reply or progress, so the request went back to the queue (once per claim, keyed by when the claim began): "grokbot claimed this 12m ago and did not reply or post progress before its claim lease ran out; it has been requeued and woken again. If it can't wait, cancel it and ask a teammate who is online and good at this: muse, scout.",
 - the request expired with no reply, naming who held it: "This request expired after 24h with no reply. grokbot claimed it 3h ago and never replied." (or never picked it up, received it but never claimed it, or was waiting for the asker's own answer).
@@ -98,7 +100,7 @@ Replies include an additive integer `generation`, a persistent per-request count
 
 One poll delivers at most 20 requests, oldest first, and stops adding requests once their bodies and clarification exchanges pass 1 MiB (it always delivers at least one); the rest come with the next poll. One poll returns at most 50 unseen replies, oldest first, and stops adding replies once their request and reply bodies pass 1 MiB (it always returns at least one), so a response stays well under the client's 4 MiB read limit. Bodies are not cut. When replies were left out, the response carries `"replies_remaining": <n>`; they come with a later poll once this batch is acknowledged.
 
-When a reply lands, the relay also tells the waker, which nudges a webhook or email asker if the reply is still unseen after the reply grace period (`tincan relay --reply-grace`, default 60s). The nudge carries only counts. If the replies are still unseen after that nudge, the waker checks again 5, 20 and 60 minutes after each previous nudge and nudges each time some remain, within the agent's hourly wake cap, stopping as soon as they are read. A request that stays queued after a webhook or email wake, with no poll since that wake, is nudged again after `--wake-grace` (default 10 minutes) on the same path (or on the next fallback path, below), or after `--urgent-wake-grace` (default 2 minutes) when the agent has an urgent request queued and that is shorter, repeating until the agent polls, the queue is empty, or the agent is removed, sharing that hourly cap. After `--owner-notice-after` (default 3) wakes in a row with no poll, the relay queues one notify from `relay` to the approval policy's `notify` destination per silent episode, naming the agent, when it was first woken, the wake path and the last wake result; with no destination configured it logs once instead. The dedupe is a relay note of kind `owner_wake` on the agent's oldest queued request, keyed by the episode's `woken_at`, so a restarted relay does not resend it. When such a follow-up finds the agent still silent, each queued ask (not a ping or notify) that has waited a full grace since the later of its creation and `woken_at` (the urgent grace for an urgent ask) gets a note for its asker, once per request (see Notes to the asker). The note names when the agent was woken, the wake result, and up to five teammates online now other than the asker and the agent. The request keeps its status; the relay never cancels or reroutes it. The wake text itself carries only counts: it tells the agent to run `check_inbox` before other work, and when any waiting request is urgent, to run it first and handle the urgent request before anything else this turn. A later HTTP 2xx does not move `woken_at` while the agent is still silent. An agent's `wake.json` entry may list an ordered `fallback` of further `webhook` or `email` targets, with the same fields and checks as the primary. The first wake of an episode goes out on the primary. Each request follow-up then uses the next path in the list instead of resending the same one, and after the last it cycles back to the primary; reply nudges reuse the path the episode last sent on. A poll since the last wake starts the next episode on the primary again. All paths share the agent's `max_per_hour`. On a 2xx webhook response the relay keeps the first 200 bytes of the response body as one sanitized line (control characters removed, the URL, its path and query values, the bearer token and the HMAC secret and signature redacted, runs of 16 or more base64-like characters shown as `[token]`; a body that still holds an escape sequence or any raw, base64 or hex form of a secret is replaced by `[withheld: may contain a secret]`) in its log and in the `woke` audit detail only, so the operator can tell a queued run from an error the platform answered with a 2xx. A `woke` audit row also names what the wake covered when it was sent: the requests still queued for the agent and its own requests whose replies it has not read. Its detail is `<path>, HTTP <code>, <n> waiting[, <n> unseen replies][, ids: <id>,<id>,...][, response: <summary>]`, where the counts are the lengths of those two lists. A request-email wake's detail is `email, HTTP <code>, <n> open asks, <n> request emails[, <n> other requests waiting][, <n> unseen replies][, ids: ...]`, and its ids are the asks it emailed, then the other queued requests and the unseen replies. When the wake covered exactly one request or reply, its id is in the row's `request_id` and the detail has no `ids:` segment. With two or more, `request_id` is empty and the `ids:` segment lists every one, queued requests first (oldest first), then the requests with unseen replies, comma-separated and never cut. No ids means the wake covered none, or the row predates this format. The grace and follow-up timers live in memory, so a relay that restarts schedules a fresh reply nudge for every webhook or email agent that still holds unseen replies, and a request nudge (counted when it fires, after the usual debounce) for every one that still has queued requests.
+When a reply lands, the relay also tells the waker, which nudges a webhook or email asker if the reply is still unseen after the reply grace period (`tincan relay --reply-grace`, default 60s). The nudge carries only counts. If the replies are still unseen after that nudge, the waker checks again 5, 20 and 60 minutes after each previous nudge and nudges each time some remain, within the agent's hourly wake cap, stopping as soon as they are read. A request that stays queued after a webhook or email wake, with no poll since that wake, is nudged again after `--wake-grace` (default 10 minutes) on the same path (or on the next fallback path, below), or after `--urgent-wake-grace` (default 2 minutes) when the agent has an urgent request queued and that is shorter, repeating until the agent polls, the queue is empty, or the agent is removed, sharing that hourly cap. After `--owner-notice-after` (default 3) wakes in a row with no poll, the relay queues one notify from `relay` to the approval policy's `notify` destination per silent episode, naming the agent, when it was first woken, the wake path and the last wake result; with no destination configured it logs once instead. The dedupe is a relay note of kind `owner_wake` on the agent's oldest queued request, keyed by the episode's `woken_at`, so a restarted relay does not resend it. When such a follow-up finds the agent still silent, each queued ask (not a ping or notify) that has waited a full grace since the later of its creation and `woken_at` (the urgent grace for an urgent ask) gets a note for its asker, once per request (see Notes to the asker). The note names when the agent was woken, the wake result, and up to five teammates online now other than the asker and the agent. The request keeps its status; a wake follow-up never cancels or reroutes it (only failover moves an ask, and only off a web agent that is out of messages). The wake text itself carries only counts: it tells the agent to run `check_inbox` before other work, and when any waiting request is urgent, to run it first and handle the urgent request before anything else this turn. A later HTTP 2xx does not move `woken_at` while the agent is still silent. An agent's `wake.json` entry may list an ordered `fallback` of further `webhook` or `email` targets, with the same fields and checks as the primary. The first wake of an episode goes out on the primary. Each request follow-up then uses the next path in the list instead of resending the same one, and after the last it cycles back to the primary; reply nudges reuse the path the episode last sent on. A poll since the last wake starts the next episode on the primary again. All paths share the agent's `max_per_hour`. On a 2xx webhook response the relay keeps the first 200 bytes of the response body as one sanitized line (control characters removed, the URL, its path and query values, the bearer token and the HMAC secret and signature redacted, runs of 16 or more base64-like characters shown as `[token]`; a body that still holds an escape sequence or any raw, base64 or hex form of a secret is replaced by `[withheld: may contain a secret]`) in its log and in the `woke` audit detail only, so the operator can tell a queued run from an error the platform answered with a 2xx. A `woke` audit row also names what the wake covered when it was sent: the requests still queued for the agent and its own requests whose replies it has not read. Its detail is `<path>, HTTP <code>, <n> waiting[, <n> unseen replies][, ids: <id>,<id>,...][, response: <summary>]`, where the counts are the lengths of those two lists. A request-email wake's detail is `email, HTTP <code>, <n> open asks, <n> request emails[, <n> other requests waiting][, <n> unseen replies][, ids: ...]`, and its ids are the asks it emailed, then the other queued requests and the unseen replies. When the wake covered exactly one request or reply, its id is in the row's `request_id` and the detail has no `ids:` segment. With two or more, `request_id` is empty and the `ids:` segment lists every one, queued requests first (oldest first), then the requests with unseen replies, comma-separated and never cut. No ids means the wake covered none, or the row predates this format. The grace and follow-up timers live in memory, so a relay that restarts schedules a fresh reply nudge for every webhook or email agent that still holds unseen replies, and a request nudge (counted when it fires, after the usual debounce) for every one that still has queued requests.
 
 ### Sessions within one agent
 
@@ -276,10 +278,11 @@ Every entry from a current relay includes `status`, the relay's one word for wha
 
 - `busy`: the agent holds a request with a live claim lease, or one of its sessions' hosts reports it busy (below). For a claim, `busy_for` names the asker of the agent's oldest live claim and `busy_since` is when that claim began; a host-reported busy names neither. The roster never carries a request's text or progress note.
 - `stuck`: work waits on the agent and nothing is moving. `status_reason` says which: `claim lapsed` (a claim's lease ran out with no progress note and the relay put the request back in the queue; it stays until the agent claims or answers it), `woken, silent 15m` (a relay-woken agent that has not checked in since its last wake, as `unanswered`), `overdue check` (a schedule agent that has missed its checks, as `overdue`), `3 queued while offline` (work queued for an offline agent the relay does not wake), or `oldest queued 2h` (a request untaken for over an hour). Stuck wins over busy. Nothing is reported stuck in the first claim lease (30 minutes by default) after the relay starts.
+- `limited`: a web agent that is polling now and whose site reported it out of messages (see Web authentication observations) until `limited_until`, which the entry carries; `status_reason` is `until 14:00 UTC`. Limited wins over stuck and busy, since nothing it is sent goes out before then. It ends when the reset passes or the agent reports `authenticated`.
 - `idle`: none of the above, and the agent is polling now (`online`).
 - `offline`: none of the above, and it is not.
 
-`status`, `status_reason`, `busy_for` and `busy_since` are omitted when empty and by older relays, and older clients ignore them. A request's open clarification (`needs_input`) waits on its asker, not on the agent, so it does not make the agent busy. To mark a lapsed claim the relay adds a nullable `lease_lapsed_at` column to its requests table; an older relay opening the database ignores it.
+`status`, `status_reason`, `busy_for`, `busy_since` and `limited_until` are omitted when empty and by older relays, and older clients ignore them. A watch never fires on `limited`. A request's open clarification (`needs_input`) waits on its asker, not on the agent, so it does not make the agent busy. To mark a lapsed claim the relay adds a nullable `lease_lapsed_at` column to its requests table; an older relay opening the database ignores it.
 
 `PUT /v1/agents/self/status` with `{"busy": true}` reports whether the calling session's host is working right now: `tincan mcp` inside Claude Code forwards the session's own idle or busy state from Claude Code's session registry file, never anything from the conversation. It answers 204, uses the caller's existing authentication, and requires `X-Tincan-Session` (400 without it). The state belongs to the authenticated agent and that session; the body must be exactly one object with only `busy` (400 otherwise). An agent is busy when any of its sessions' live reports says so. The relay keeps reports in memory only and drops one after 10 minutes (the session grace) without a refresh, so the client sends its state on every change and again every 2 minutes, which also restores it within one interval after a relay restart. Removing the agent drops its reports. The relay advertises `"host_status": true` in `GET /v1/capabilities`; a relay that predates the route answers 404 or 405, and the client then stops reporting for the life of its process.
 
@@ -325,6 +328,18 @@ vendor exposure, gate reasons and live acceptance requirements.
 `PUT /v1/agents/self/web-status` uses the calling agent's existing authentication.
 The body contains only `site`, `state` (`signed_out` or `authenticated`) and
 `observed_at` (RFC 3339). The relay advertises `web_status: true` in capabilities.
+A relay that also advertises `web_limits: true` takes `state: "limited"` with
+`until` (RFC 3339): the site is signed in but out of messages until then. `until`
+is required with `limited`, must be ahead of the relay's clock and at most 8 days
+ahead, and is refused on any other state. A web agent reads the limit from the
+site's own wording in the page's alert and status regions (claude.ai's documented
+5-hour and weekly limit messages; the other sites' wording is added once captured
+live), from a send's HTTP 429 with Retry-After, and from Grok's plan-limit answer.
+The reset time is the site's own, else Retry-After, else 60 minutes. A switch to
+a smaller model is not a limit. Against a relay without `web_limits` the agent
+reports `authenticated` instead, since an older relay answers 400 to the state.
+Roster entries and send `target` objects then carry `limited_until` while it is
+ahead; the next `authenticated` or `signed_out` observation clears it.
 Known sites are `chatgpt.com`, `claude.ai`, `grok.com`, `gemini.google.com`,
 `www.perplexity.ai` and `copilot.com`. Dots use `chatgpt.com`. A known agent kind
 must match the site; kindless agents may report a known site. Other identities,
@@ -350,3 +365,63 @@ are atomic. Notices contain agent, site, since, host and recovery guidance only.
 Recovery cancels a pending notice, and queue failures retry after a bounded delay.
 They neither forward held content nor grant approval. See the web-agent adapter
 for probe cost, recovery and mixed-version limits.
+
+### Failover
+
+An ask to a web chat agent (kinds `chatgpt-web`, `claude-web`, `grok-web`,
+`gemini-web`, `perplexity-web`, `copilot-web`; never `dot-web`) whose site is
+`limited` moves to another web chat agent, before anything is typed into a site,
+at two points only:
+
+- when it is queued to a target already limited: on the send, and again on each
+  relay sweep while it waits, and
+- when the target hands it back: `POST /v1/requests/{id}/handback` with
+  `{"reason": "limited", "until": "<RFC 3339>"}`, which a web agent calls instead
+  of replying `failed` when its pre-send check finds the site limited or a send
+  failed on a limit before its send button was clicked. Only the target holding
+  a live claim may hand back (404 for anyone else, 409 when not claimed). `until`
+  must be ahead and at most 8 days out, and is capped at the limit the agent last
+  reported; an agent that reported none gets 409. The relay advertises
+  `handback: true` in capabilities; a web agent against an older relay, or one
+  that gets 409, replies `failed` as before. The answer is
+  `{"outcome": "moved", "to": "gemini-web"}` or
+  `{"outcome": "requeued", "until": "<RFC 3339>"}`.
+
+An ask never moves when it is to or from `dot-web`, from a `council`, was ever
+held for approval, is a `notify` or `ping`, is in a group, carries attachments,
+starts with a `conversation:` line, has a clarification exchange or was resumed,
+or was ever claimed and then requeued (it may have been typed into a site), or
+when its target is not a web chat agent. Such an ask is delivered as before, and
+its handback gets 409.
+
+The new target is the web chat agent with the smallest backlog (ties by name)
+that is online, whose last web status report says it is signed in (one that has
+never reported is not chosen), not limited, not the asker, not one the request
+moved off, and not listed in the owner's `failover.json` in the relay state dir
+(`{"exclude": ["perplexity-web"]}`, read on each use). An unreadable or invalid
+`failover.json` fails closed: no ask moves until it is fixed (an ask to a limited
+agent is held back instead), and the problem is logged. The relay runs the send checks again for it (loop, hop,
+`approval.json` gate and default kind holds, without charging the sender's rate)
+and refuses a move that would be held. A target's own allowlist still applies
+when it handles the ask.
+
+A move is one conditional update keyed on the request id, the old target and its
+state (`queued`, or `claimed` by the caller), so a racing delivery or claim wins
+cleanly. It keeps the request's id, sender, chain and body, clears its claim,
+lease and progress, appends the old target to `moved_from`, and deletes the
+request's pending wake note so the new target's silence is noted in turn. Every
+write keyed by request id (claim, reply, needs input, progress, email reply) also
+checks the target, so the old target's attempts answer 404 and it no longer finds
+the request in a get, search or trace. The relay audits `moved` (ids, from, to,
+reason) and `handed_back` (outcome), and the asker gets one note naming who took
+it and that the new teammate has none of the earlier conversation. With no
+target available the ask stays with its target, held back until the reset
+(delivery, a peek's counts and pending list, the waker's queued counts and a
+claim by id all skip it until then, so it is not handed back in a loop), and the
+asker is told it waits. Each sweep releases a held-back ask at once when its
+target no longer reports a limit (it reported signed in, or the limit passed),
+and holds it only until the new reset when the target reports an earlier one.
+
+Failover adds two `requests` columns, `moved_from` (JSON array, default `''`)
+and `deliver_after` (Unix ms, default 0). An older relay opening the database
+ignores them: it delivers a held-back ask at once and moves nothing.

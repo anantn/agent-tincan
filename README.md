@@ -393,7 +393,7 @@ Every agent gets the same tools, either from the MCP server (`tincan mcp`, stdio
 | `reply` | `tincan reply <id> <message>` | Answer with status `answered` (default), `failed` or `declined`, optionally with attachments. Use status `needs_input` (`--needs-input`) to ask a clarifying question. |
 | `answer` | `tincan answer <id> <message>` | Supply a clarification on a request you sent, resuming it for the same teammate. |
 | `cancel` | `tincan cancel <id>` | Withdraw a request nobody has picked up yet. |
-| `list_agents` | `tincan agents` | The roster: online or not, status (busy on whose request, idle, stuck and why, or offline), wake method, kind, when each agent last called the relay, which tincan build each runs, queued work with its oldest wait and live claims, what each opted-in Claude Code session says it is working on (`working_on`), and what each is good at (`good_at`). |
+| `list_agents` | `tincan agents` | The roster: online or not, status (busy on whose request, idle, stuck and why, a web agent limited until its site resets, or offline), wake method, kind, when each agent last called the relay, which tincan build each runs, queued work with its oldest wait and live claims, what each opted-in Claude Code session says it is working on (`working_on`), and what each is good at (`good_at`). |
 | `trace` | `tincan trace [trace-id]` | Show a request chain step by step. Agents see chains they took part in; admins see every chain. |
 | `search` | `tincan search <text> [--limit N] [--json]` | Find past requests and replies by text, with snippets and trace ids. Same chain visibility as trace. |
 | `onboard` | `tincan onboard --json` | The setup kit as JSON (see [Onboarding](#onboarding)). Read-only. |
@@ -1260,6 +1260,12 @@ For each request, one at a time:
 Send journal: right after a send is confirmed, the agent records the request id, conversation id and send time in `~/.config/tincan/<agent>-journal.json` (0600, no message text). If the relay requeues the request after its 30 minute claim lease, the agent reads the answer from the journaled conversation instead of sending again. Entries are dropped after 90 minutes.
 
 The web agents send the request text only; messages over 32 KB are refused, not cut.
+
+#### When a subscription runs out (failover)
+
+A web agent whose site says the account is out of messages shows as `limited until <time>` in `tincan agents`, `list_agents` and `tincan top`, and sends nothing to the site until then. It reads the limit from claude.ai's own banner ("5-hour limit reached - resets 2:00 PM", or the weekly limit message), from an HTTP 429 that says when to come back, or from a Grok answer that ends on its plan limit; the reset time is the site's, else the 429's, else 60 minutes. The other sites' banners are read once their wording is captured live. A site that moves you to a smaller model and keeps answering is not limited.
+
+An ask to a limited web agent that has not been typed into the site yet moves to another web agent (ChatGPT, Claude, Grok, Gemini, Perplexity or Copilot) that is online, signed in and not limited, the one with the least backlog first. It keeps its id, so the asker reads the answer as usual, and the asker gets one note: "claude-web is out of messages until 14:00 UTC; gemini-web took your request." The new teammate has none of the earlier conversation with the limited one. When no web agent is free, the ask waits for the reset and the asker is told so. An ask never moves when it is to or from `dot-web` or a council, was held for your approval, is a notify, is part of a group, carries attachments, starts with `conversation:`, has a clarification exchange, or may already have been sent; those behave as before. To keep asks off a web agent, list it in `failover.json` in the relay state dir: `{"exclude": ["perplexity-web"]}`. `tincan trace` shows a moved hop as `codex -> gemini-web (moved from claude-web)`, and `tincan doctor` lists each limited web agent with its reset time. It needs the relay and the web agent upgraded; against an older relay a limited web agent fails the ask as before. Details: [protocol](docs/protocol.md#failover), [trust model](docs/trust-model.md#the-web-agents).
 
 #### One-time setup
 

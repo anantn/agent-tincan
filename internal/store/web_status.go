@@ -19,35 +19,50 @@ type WebStatus struct {
 	Since      time.Time
 	Pending    bool
 	RetryAt    time.Time
+	// LimitedUntil is the reset time of the last limited report, zero
+	// once a later report was not limited.
+	LimitedUntil time.Time
 }
 
 func (s *Store) migrateWebStatus() error {
-	_, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS web_status (
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS web_status (
  agent TEXT PRIMARY KEY REFERENCES agents(name) ON DELETE CASCADE,
  node_id TEXT NOT NULL, joined_at INTEGER NOT NULL, site TEXT NOT NULL,
- observed_at INTEGER NOT NULL, since INTEGER, notice_pending INTEGER NOT NULL DEFAULT 0, notice_retry_at INTEGER NOT NULL DEFAULT 0)`)
+ observed_at INTEGER NOT NULL, since INTEGER, notice_pending INTEGER NOT NULL DEFAULT 0, notice_retry_at INTEGER NOT NULL DEFAULT 0)`); err != nil {
+		return err
+	}
+	var has bool
+	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('web_status') WHERE name = 'limited_until')`).Scan(&has); err != nil || has {
+		return err
+	}
+	_, err := s.db.Exec(`ALTER TABLE web_status ADD COLUMN limited_until INTEGER NOT NULL DEFAULT 0`)
 	return err
 }
 
 // SetWebStatus accepts only a newer observation for the current binding.
+// A limited observation records its reset time; any other clears it.
 func (s *Store) SetWebStatus(ctx context.Context, a identity.Agent, in envelope.WebStatus, now time.Time) error {
 	var since any
-	if in.State == "signed_out" {
+	if in.State == envelope.WebSignedOut {
 		since = now.UnixMilli()
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO web_status(agent,node_id,joined_at,site,observed_at,since,notice_pending)
- SELECT name,node_id,joined_at,?,?,?,? FROM agents WHERE name=? AND node_id=? AND joined_at=?
- ON CONFLICT(agent) DO UPDATE SET site=excluded.site, observed_at=excluded.observed_at,
+	var limited int64
+	if in.State == envelope.WebLimited {
+		limited = in.Until.UnixMilli()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO web_status(agent,node_id,joined_at,site,observed_at,since,notice_pending,limited_until)
+ SELECT name,node_id,joined_at,?,?,?,?,? FROM agents WHERE name=? AND node_id=? AND joined_at=?
+ ON CONFLICT(agent) DO UPDATE SET site=excluded.site, observed_at=excluded.observed_at, limited_until=excluded.limited_until,
  since=CASE WHEN excluded.since IS NULL THEN NULL ELSE COALESCE(web_status.since,excluded.since) END,
  notice_pending=CASE WHEN excluded.since IS NULL THEN 0 WHEN web_status.since IS NULL THEN 1 ELSE web_status.notice_pending END,
  notice_retry_at=CASE WHEN excluded.since IS NULL OR web_status.since IS NULL THEN 0 ELSE web_status.notice_retry_at END
- WHERE excluded.observed_at > web_status.observed_at`, in.Site, in.ObservedAt.UnixMilli(), since, in.State == "signed_out", a.Name, a.NodeID, a.JoinedAt.UnixMilli())
+ WHERE excluded.observed_at > web_status.observed_at`, in.Site, in.ObservedAt.UnixMilli(), since, in.State == envelope.WebSignedOut, limited, a.Name, a.NodeID, a.JoinedAt.UnixMilli())
 	return err
 }
 
 // WebStatuses reads the roster's facts in one snapshot, outside relay locks.
 func (s *Store) WebStatuses(ctx context.Context) (map[string]WebStatus, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT agent,node_id,joined_at,site,observed_at,since,notice_pending,notice_retry_at FROM web_status`)
+	rows, err := s.db.QueryContext(ctx, `SELECT agent,node_id,joined_at,site,observed_at,since,notice_pending,notice_retry_at,limited_until FROM web_status`)
 	if err != nil {
 		return nil, err
 	}
@@ -56,9 +71,9 @@ func (s *Store) WebStatuses(ctx context.Context) (map[string]WebStatus, error) {
 	for rows.Next() {
 		var name string
 		var v WebStatus
-		var joined, observed, retry int64
+		var joined, observed, retry, limited int64
 		var since sql.NullInt64
-		if err := rows.Scan(&name, &v.NodeID, &joined, &v.Site, &observed, &since, &v.Pending, &retry); err != nil {
+		if err := rows.Scan(&name, &v.NodeID, &joined, &v.Site, &observed, &since, &v.Pending, &retry, &limited); err != nil {
 			return nil, err
 		}
 		v.RetryAt = time.UnixMilli(retry)
@@ -67,13 +82,17 @@ func (s *Store) WebStatuses(ctx context.Context) (map[string]WebStatus, error) {
 		if since.Valid {
 			v.Since = time.UnixMilli(since.Int64)
 		}
+		if limited > 0 {
+			v.LimitedUntil = time.UnixMilli(limited)
+		}
 		out[name] = v
 	}
 	return out, rows.Err()
 }
 
-// Apply adds facts only for the directory identity that made the report.
-func (v WebStatus) Apply(a identity.Agent, target *envelope.Target) {
+// Apply adds facts only for the directory identity that made the report,
+// and its usage limit only while the reset time is still ahead of now.
+func (v WebStatus) Apply(a identity.Agent, target *envelope.Target, now time.Time) {
 	if v.NodeID != a.NodeID || v.JoinedAt.UnixMilli() != a.JoinedAt.UnixMilli() || v.ObservedAt.IsZero() {
 		return
 	}
@@ -82,6 +101,9 @@ func (v WebStatus) Apply(a identity.Agent, target *envelope.Target) {
 	if !v.Since.IsZero() {
 		target.SignedOutSite = v.Site
 		target.SignedOutSince = v.Since
+	}
+	if v.LimitedUntil.After(now) {
+		target.LimitedUntil = v.LimitedUntil
 	}
 }
 

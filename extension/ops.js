@@ -367,6 +367,11 @@ export class OpError extends Error {
   }
 }
 
+// ERROR_NOTICE_MAX caps the notice an error frame carries, in characters.
+// It matches send.js MAX_NOTICE, written out because send.js imports this
+// file.
+const ERROR_NOTICE_MAX = 500;
+
 // errorFrame is the failure frame for an error thrown by an operation:
 // its code and message (retry_after too for a rate limit, clicked for a
 // send that failed after its click), or a bare
@@ -378,6 +383,8 @@ export function errorFrame(e) {
   if (e.retryAfter !== undefined) error.retry_after = e.retryAfter;
   if (e.clicked === true) error.clicked = true;
   if (e.uploaded === true) error.uploaded = true;
+  // notice: a send's page alert and status text, as is (send.js).
+  if (typeof e.notice === 'string' && e.notice !== '') error.notice = e.notice.slice(0, ERROR_NOTICE_MAX);
   return { ok: false, error };
 }
 

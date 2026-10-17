@@ -38,8 +38,16 @@ type fakeBrowser struct {
 	reply func(prompt string) string
 	// image, when set, is generated with every reply.
 	image []byte
-	// sendErr, when set, fails the next sends with this code.
-	sendErr string
+	// sendErr, when set, fails the next sends with this code, carrying
+	// sendRetryAfter, sendNotice (the page's alert text) and sendClicked
+	// with it.
+	sendErr        string
+	sendRetryAfter int
+	sendNotice     string
+	sendClicked    bool
+	// sentNotice is the page's alert text a send that went through
+	// reports with its result.
+	sentNotice string
 	// block makes sends wait for the request context to end.
 	block bool
 	// detailErr, when set, fails every detail read after the first
@@ -101,14 +109,14 @@ func (f *fakeBrowser) Exchange(ctx context.Context, req NativeRequest, recv func
 	case OpChatGPTSend, OpClaudeAISend:
 		f.mu.Lock()
 		f.sends = append(f.sends, req.Args)
-		block, code := f.block, f.sendErr
+		block, code, after, notice, clicked := f.block, f.sendErr, f.sendRetryAfter, f.sendNotice, f.sendClicked
 		f.mu.Unlock()
 		if block {
 			<-ctx.Done()
 			return ctx.Err()
 		}
 		if code != "" {
-			_, err := recv(NativeResponse{ID: req.ID, Error: &NativeError{Code: code, Message: "fake " + code}})
+			_, err := recv(NativeResponse{ID: req.ID, Error: &NativeError{Code: code, Message: "fake " + code, RetryAfter: after, Notice: notice, Clicked: clicked}})
 			return err
 		}
 		f.mu.Lock()
@@ -127,8 +135,9 @@ func (f *fakeBrowser) Exchange(ctx context.Context, req NativeRequest, recv func
 			t.imageID = fmt.Sprintf("file-Gen%d", len(f.convs[id])+f.seq)
 		}
 		f.convs[id] = append(f.convs[id], t)
+		sentNotice := f.sentNotice
 		f.mu.Unlock()
-		res, _ := json.Marshal(SendResult{ConversationID: id, URL: "https://chatgpt.com/c/" + id, SubmittedAt: now.UnixMilli()})
+		res, _ := json.Marshal(SendResult{ConversationID: id, URL: "https://chatgpt.com/c/" + id, SubmittedAt: now.UnixMilli(), Notice: sentNotice})
 		_, err := recv(NativeResponse{ID: req.ID, OK: true, Result: res})
 		return err
 	case OpChatGPTDetail:

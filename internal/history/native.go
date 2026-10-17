@@ -336,6 +336,10 @@ type NativeError struct {
 	// clicked: the message may have been sent.
 	Clicked  bool `json:"clicked,omitempty"`
 	Uploaded bool `json:"uploaded,omitempty"`
+	// Notice is a send's page text from its alert and status regions,
+	// reported as is: the Go side reads usage limits from it
+	// (detectLimit).
+	Notice string `json:"notice,omitempty"`
 }
 
 // NativeChunk is one piece of a file's bytes, base64.
@@ -408,6 +412,9 @@ type UnavailableError struct {
 	// message may have been sent anyway.
 	Clicked  bool
 	Uploaded bool
+	// Notice is the page's alert and status text a failed send reported
+	// (NativeError.Notice), never shown in a reply.
+	Notice string
 }
 
 // siteOf is a site's host, for error text (the source name for a site
@@ -522,6 +529,34 @@ type SiteCooldown struct {
 	// blocked marks a cooldown whose end was last set by an anti-bot
 	// check rather than a rate limit.
 	blocked map[Source]bool
+	// limited is when each site's usage limit resets (NoteLimit).
+	limited map[Source]time.Time
+}
+
+// NoteLimit records that src's account is out of messages until until (a
+// usage limit, not a short rate limit) and holds every request to src back
+// until then.
+func (c *SiteCooldown) NoteLimit(src Source, until time.Time) {
+	c.note(src, until.Sub(c.now()), false)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.limited == nil {
+		c.limited = map[Source]time.Time{}
+	}
+	if until.After(c.limited[src]) {
+		c.limited[src] = until
+	}
+}
+
+// LimitedUntil is when src's usage limit resets, zero when none is
+// running.
+func (c *SiteCooldown) LimitedUntil(src Source) time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if t := c.limited[src]; t.After(c.now()) {
+		return t
+	}
+	return time.Time{}
 }
 
 func (c *SiteCooldown) now() time.Time { return orNow(c.Now) }
@@ -570,13 +605,17 @@ func (c *SiteCooldown) Remaining(src Source) time.Duration {
 // process.
 var sharedCooldown = &SiteCooldown{}
 
+// maxNotice caps the page text a send reports, in runes.
+const maxNotice = 500
+
 // fromNativeError maps an extension error code to a typed error, and
-// carries a send's clicked mark over.
+// carries a send's clicked mark and page notice over.
 func fromNativeError(s Source, ne *NativeError) error {
 	err := nativeErrorKind(s, ne)
 	if ue, ok := errors.AsType[*UnavailableError](err); ok {
 		ue.Clicked = ne.Clicked
 		ue.Uploaded = ne.Uploaded
+		ue.Notice = clip(ne.Notice, maxNotice)
 	}
 	return err
 }
@@ -667,8 +706,12 @@ func (c *Client) cooldownError(src Source) error {
 	if c.cooldown().Blocked(src) {
 		return unavailable(src, ErrBlocked, "requests to it are held back for another "+left.Round(time.Second).String())
 	}
-	return &UnavailableError{Source: src, Kind: ErrRateLimited, Detail: "cooling down after a rate limit", RetryAfter: left}
+	return &UnavailableError{Source: src, Kind: ErrRateLimited, Detail: cooldownDetail, RetryAfter: left}
 }
+
+// cooldownDetail marks a rate limit this process or the native host
+// answered itself from a running cooldown, not one the site just sent.
+const cooldownDetail = "cooling down after a rate limit"
 
 // hitsSite reports whether op makes a request to the site. Closing a tab
 // does not, so it runs during a cooldown.
@@ -882,6 +925,9 @@ type SendResult struct {
 	// binds to it.
 	MessageID  string `json:"message_id,omitempty"`
 	InputCount int    `json:"input_count,omitempty"`
+	// Notice is the page's alert and status text after the send, as
+	// NativeError.Notice.
+	Notice string `json:"notice,omitempty"`
 }
 
 // Submitted returns SubmittedAt as a time, zero when unknown.
@@ -1345,7 +1391,7 @@ func (h *NativeHost) serve(ctx context.Context, conn net.Conn) {
 	src := req.Op.source()
 	if left := h.cooldown.Remaining(src); left > 0 && req.Op.hitsSite() {
 		secs := int((left + time.Second - 1) / time.Second)
-		_ = WriteMessage(conn, NativeResponse{ID: req.ID, Error: &NativeError{Code: "rate_limited", Message: "cooling down after a rate limit", RetryAfter: secs}}, MaxHostMessage)
+		_ = WriteMessage(conn, NativeResponse{ID: req.ID, Error: &NativeError{Code: "rate_limited", Message: cooldownDetail, RetryAfter: secs}}, MaxHostMessage)
 		return
 	}
 	clientID := req.ID

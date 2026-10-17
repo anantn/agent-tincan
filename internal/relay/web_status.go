@@ -15,6 +15,14 @@ var webKindSites = map[string]string{
 	"chatgpt-web": "chatgpt.com", "dot-web": "chatgpt.com", "claude-web": "claude.ai", "grok-web": "grok.com", "gemini-web": "gemini.google.com", "perplexity-web": "www.perplexity.ai", "copilot-web": "copilot.com",
 }
 
+// MaxWebLimit is how far ahead a web agent's reported usage limit may
+// reset: a weekly limit, with a day of slack for a reset time read from the
+// site in the owner's time zone.
+const MaxWebLimit = 8 * 24 * time.Hour
+
+// handleWebStatus records the calling web agent's own observation of its
+// site: signed in, signed out, or (from a client that saw the web_limits
+// capability) limited until the site's reset time.
 func (s *Server) handleWebStatus(w http.ResponseWriter, r *http.Request) {
 	name := s.agent(w, r)
 	if name == "" {
@@ -27,7 +35,13 @@ func (s *Server) handleWebStatus(w http.ResponseWriter, r *http.Request) {
 		validSite = validSite || in.Site == site
 	}
 	now := s.cfg.Now()
-	if err != nil || !validSite || (in.State != "signed_out" && in.State != "authenticated") || in.ObservedAt.Before(now.Add(-5*time.Minute)) || in.ObservedAt.After(now.Add(time.Minute)) {
+	validState := in.State == envelope.WebSignedOut || in.State == envelope.WebAuthenticated
+	if in.State == envelope.WebLimited {
+		validState = in.Until.After(now) && !in.Until.After(now.Add(MaxWebLimit))
+	} else if !in.Until.IsZero() {
+		validState = false
+	}
+	if err != nil || !validSite || !validState || in.ObservedAt.Before(now.Add(-5*time.Minute)) || in.ObservedAt.After(now.Add(time.Minute)) {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid web status observation"))
 		return
 	}
@@ -85,7 +99,7 @@ func (s *Server) notifyWebStatus(ctx context.Context) {
 			continue
 		}
 		var target envelope.Target
-		status.Apply(a, &target)
+		status.Apply(a, &target, s.cfg.Now())
 		if target.SignedOutSite == "" {
 			continue
 		}

@@ -529,10 +529,17 @@ Right after online or offline, each roster line shows the relay's status for
 that teammate: status=busy (codex's request, 12m) when it is working on a
 teammate's request (or status=busy alone while its owner is chatting with a
 Claude Code session), status=stuck (claim lapsed) when work waits on it and
-nothing is moving, with the reason, or status=idle / status=offline. Use it to
-choose: when several teammates fit, prefer an idle one, and do not wait on one
-that is stuck. It never shows what anyone asked. An older relay sends no
+nothing is moving, with the reason, status=limited (until 14:00 UTC) for a web
+teammate whose site is out of messages, or status=idle / status=offline. Use
+it to choose: when several teammates fit, prefer an idle one, and do not wait
+on one that is stuck. It never shows what anyone asked. An older relay sends no
 status.
+
+An ask to a limited web teammate (chatgpt-web, claude-web, grok-web,
+gemini-web, perplexity-web or copilot-web) that it has not sent yet may be
+answered by another web teammate instead. The relay tells you once which one
+took it, and the reply comes back on the same request id. The new teammate has
+none of the earlier conversation. Do not send the request again.
 
 To wait for a busy teammate, call the watch tool with its name (or run
 `tincan watch <agent>`) instead of checking list_agents again and again. The
