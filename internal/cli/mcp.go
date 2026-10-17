@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -54,6 +56,11 @@ default.`,
 			// can tell an app that never starts tincan from one that does.
 			rec := mcpserver.StartRecorder(mcpserver.LaunchDir(client.ConfigPath()), Version, channel)
 			defer func() { rec.End(err) }()
+			// The host stops its MCP servers with a signal when a session
+			// ends. Turn that into a return, so deferred cleanup runs, such
+			// as taking a shared title off the roster.
+			runCtx, stopSignals := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stopSignals()
 			r, cfg, err := connect()
 			if err != nil {
 				return err
@@ -65,14 +72,14 @@ default.`,
 				r.SetSession(newSession())
 			}
 			if shareTitle {
-				stop := startTitleSharing(cmd.Context(), newClaudeTitleSharer(r, os.Getenv, os.Getppid()), sessionKeepalive)
+				stop := startTitleSharing(runCtx, newClaudeTitleSharer(r, os.Getenv, os.Getppid()), sessionKeepalive)
 				defer stop()
 			}
 			files := mcpserver.LocalFiles(client.AttachmentDir(cfg))
 			watch := mcpserver.Watch(mcpserver.NewBuildWatch(ownBinary(), Version))
 			route, p := pickWake(channel, wakeSocket, claudeSocketFromEnv)
 			if route != wakeByChannel {
-				ctx, cancel := context.WithCancel(cmd.Context())
+				ctx, cancel := context.WithCancel(runCtx)
 				defer cancel()
 				if route == wakeBySocket {
 					// The socket wake peeks, which keeps the session live.
@@ -89,7 +96,7 @@ default.`,
 				return mcpserver.New(r, Version, files, watch).Run(ctx, mcpserver.StdioRecorded(rec))
 			}
 			t := mcpserver.NewChannelTransport(mcpserver.StdioRecorded(rec))
-			ctx, cancel := context.WithCancel(cmd.Context())
+			ctx, cancel := context.WithCancel(runCtx)
 			defer cancel()
 			go pushWaiting(ctx, r, t)
 			return mcpserver.NewWithOptions(r, Version, mcpserver.ChannelOptions(), files, watch).Run(ctx, t)
