@@ -321,24 +321,32 @@ func TestFailoverExcludedTarget(t *testing.T) {
 	}
 }
 
-// An invalid failover.json (an entry that is not an agent name) moves no
-// ask: a new one to a limited agent is held back on it instead.
+// An invalid failover.json (an entry that is not an agent name, or a
+// top-level null) moves no ask: a new one to a limited agent is held back
+// on it instead.
 func TestFailoverInvalidFileMovesNothing(t *testing.T) {
-	h, clk := failoverHarness(t)
-	path := filepath.Join(t.TempDir(), FailoverFile)
-	if err := os.WriteFile(path, []byte(`{"exclude":["not a name!"]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	h.srv.cfg.FailoverPath = path
-	limitAt(h, clk, grokAddr, time.Hour)
-	sent := h.send(instinctAddr, "grokbot", "summarize this paper")
-	h.srv.Sweep(t.Context())
-	res := getAs(h, instinctAddr, sent.ID)
-	if res.Request.To != "grokbot" || res.RelayNote == nil || !strings.Contains(res.RelayNote.Note, "it waits") {
-		t.Fatalf("asker sees %+v %+v", res.Request, res.RelayNote)
-	}
-	if m := auditEvents(h, "moved"); len(m) != 0 {
-		t.Fatalf("moved audit = %+v", m)
+	for name, content := range map[string]string{
+		"bad name": `{"exclude":["not a name!"]}`,
+		"null":     `null`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, clk := failoverHarness(t)
+			path := filepath.Join(t.TempDir(), FailoverFile)
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			h.srv.cfg.FailoverPath = path
+			limitAt(h, clk, grokAddr, time.Hour)
+			sent := h.send(instinctAddr, "grokbot", "summarize this paper")
+			h.srv.Sweep(t.Context())
+			res := getAs(h, instinctAddr, sent.ID)
+			if res.Request.To != "grokbot" || res.RelayNote == nil || !strings.Contains(res.RelayNote.Note, "it waits") {
+				t.Fatalf("asker sees %+v %+v", res.Request, res.RelayNote)
+			}
+			if m := auditEvents(h, "moved"); len(m) != 0 {
+				t.Fatalf("moved audit = %+v", m)
+			}
+		})
 	}
 }
 

@@ -892,6 +892,17 @@ export function createSender({
       if (p.notice) notice = p.notice;
       return p;
     };
+    // finalNotice reads the notice once more after the send is confirmed,
+    // on every success path: a limit banner can first show with the send
+    // itself, after the last read. The send already went through, so a
+    // failed read keeps the notice as it was rather than failing it.
+    const finalNotice = async () => {
+      try {
+        await probe();
+      } catch {
+        // The send stands; the earlier notice is reported.
+      }
+    };
     try {
       // 1. Page load, then a composer (or a login page).
       const blockedErr = () => new OpError('blocked', `anti-bot check on ${new URL(cfg.newURL).host}`);
@@ -1021,6 +1032,7 @@ export function createSender({
           await onSite(tab.id, cfg);
           const messageId = await hooks.confirm();
           if (typeof messageId === 'string' && messageId !== '') {
+            await finalNotice();
             done = true;
             keep(tab.id, site, existing);
             return { conversation_id: existing, url: cfg.convURL(pageId), submitted_at: submittedAt, message_id: messageId, ...(notice ? { notice } : {}) };
@@ -1061,6 +1073,7 @@ export function createSender({
           await sleep(pollMs);
         }
       }
+      await finalNotice();
       done = true;
       keep(tab.id, site, id);
       return { conversation_id: id, url: cfg.convURL(id), submitted_at: submittedAt, ...(images ? { message_id: messageId, input_count: images.length } : {}), ...(notice ? { notice } : {}) };

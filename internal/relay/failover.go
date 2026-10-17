@@ -114,7 +114,7 @@ func (s *Server) failoverExcluded() (names []string, ok bool) {
 }
 
 // readFailover parses failover.json: one object whose only key, exclude,
-// lists agent names.
+// lists agent names. Anything else, a top-level null included, is invalid.
 func readFailover(path string) ([]string, error) {
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -131,13 +131,18 @@ func readFailover(path string) ([]string, error) {
 	if len(raw) > 1<<16 {
 		return nil, errors.New("too large")
 	}
-	var in struct {
+	// A pointer so a top-level null, which would decode into a zero struct
+	// as an empty list, is told apart and fails closed.
+	var in *struct {
 		Exclude []string `json:"exclude"`
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
 	if err := d.Decode(&in); err != nil {
 		return nil, fmt.Errorf("invalid: %w", err)
+	}
+	if in == nil {
+		return nil, errors.New("invalid: null, not an object")
 	}
 	if d.Decode(new(any)) != io.EOF {
 		return nil, errors.New("invalid: more than one object")

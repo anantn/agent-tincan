@@ -223,6 +223,9 @@ class FakeSite {
       return;
     }
     this.submitted.push(text);
+    // noticeOnSubmit: the alert region shows this text only once the
+    // message is sent (a limit banner that comes with the send).
+    if (this.opts.noticeOnSubmit) this.opts.notice = this.opts.noticeOnSubmit;
     this.messages.push({ role: 'user', text });
     this.composer.text = '';
     this.composer.value = '';
@@ -473,6 +476,21 @@ test('a send reports the page alert text as its notice, uninterpreted: on a fail
   assert.equal(r.notice, 'You have 2 messages left');
   fc = fakeChrome((url) => new FakeSite('claudeai', url));
   assert.equal('notice' in (await sender(fc).send('claudeai', { message: 'x' })), false);
+  assertOnlyFixedScripts(fc.log);
+});
+
+test('a send reads the page notice again once the send is confirmed: a banner that first shows after the click is reported', async () => {
+  const limit = '5-hour limit reached - resets 2:00 PM';
+  // A new chat, confirmed by the id in its address.
+  let page;
+  let fc = fakeChrome((url) => (page = new FakeSite('claudeai', url, { noticeOnSubmit: limit })));
+  let r = await sender(fc).send('claudeai', { message: 'x' });
+  assert.equal(r.conversation_id, page.newID);
+  assert.equal(r.notice, limit);
+  // An existing chat, confirmed by the page's message counts.
+  fc = fakeChrome((url) => new FakeSite('claudeai', url, { noticeOnSubmit: limit }));
+  r = await sender(fc).send('claudeai', { message: 'x', conversation_id: 'abc123' });
+  assert.equal(r.notice, limit);
   assertOnlyFixedScripts(fc.log);
 });
 
