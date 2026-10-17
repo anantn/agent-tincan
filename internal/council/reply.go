@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
+	"github.com/mvanhorn/agent-tincan/internal/textfit"
 )
 
 // Finished is a council that ran, or was declined before anyone was asked:
@@ -314,7 +315,7 @@ const receivedAnswerBudget = 32 << 10
 
 // receivedAnswers returns the answers cut to share receivedAnswerBudget.
 func receivedAnswers(answers []Answer) []Answer {
-	bodies, _ := truncateAll(answers, fit(lengths(answers), receivedAnswerBudget))
+	bodies, _ := truncateAll(answers, textfit.Fit(lengths(answers), receivedAnswerBudget))
 	out := make([]Answer, len(answers))
 	for i, a := range answers {
 		a.Body = bodies[i]
@@ -347,7 +348,7 @@ func (f Finished) verdictSections() []verdictSection {
 		{"Disagreement", revealLabels(v.Disagreement, v.Labels)},
 		{"Minority", revealLabels(v.Minority, v.Labels)},
 	}
-	texts, _ := truncateAll(secs, fit(lengths(secs), verdictBudget))
+	texts, _ := truncateAll(secs, textfit.Fit(lengths(secs), verdictBudget))
 	for i := range secs {
 		secs[i].text = texts[i]
 	}

@@ -219,6 +219,43 @@ func TestConversationRefHosts(t *testing.T) {
 	}
 }
 
+// A chat URL on each history site resolves to its source and canonical id;
+// a site that is not a history source, another host or a non-chat path is
+// refused.
+func TestResolveChatURL(t *testing.T) {
+	for ref, want := range map[string]struct {
+		src Source
+		id  string
+	}{
+		"https://chatgpt.com/c/abc-1":                                                          {SourceChatGPT, "abc-1"},
+		"https://chatgpt.com/g/g-x/c/abc-2":                                                    {SourceChatGPT, "abc-2"},
+		"https://claude.ai/chat/abc-3":                                                         {SourceClaudeAI, "abc-3"},
+		"https://gemini.google.com/app/0123456789ABCDEF":                                       {SourceGemini, "0123456789abcdef"},
+		"https://grok.com/c/0e1d0000-0000-4000-8000-000000000001":                              {SourceGrok, "0e1d0000-0000-4000-8000-000000000001"},
+		"https://copilot.microsoft.com/chat/conversation/0E1D0000-0000-4000-8000-000000000002": {SourceCopilot, "0e1d0000-0000-4000-8000-000000000002"},
+		"https://copilot.com/chat/conversation/0e1d0000-0000-4000-8000-000000000003":           {SourceCopilot, "0e1d0000-0000-4000-8000-000000000003"},
+	} {
+		src, id, err := ResolveChatURL(ref)
+		if err != nil || src != want.src || id != want.id {
+			t.Errorf("%s: %q %q %v, want %q %q", ref, src, id, err, want.src, want.id)
+		}
+	}
+	for ref, wantErr := range map[string]string{
+		"https://www.perplexity.ai/search/0e1d0000-0000-4000-8000-0000000000a1": "Perplexity",
+		"https://chatgpt.com/dots/0e1d0000-0000-4000-8000-0000000000b1":         "your dot",
+		"https://example.com/c/abc-4":                                           "not a chat",
+		"http://chatgpt.com/c/abc-5":                                            "not a chat",
+		"https://grok.com/chat/abc-6":                                           "not a Grok conversation",
+		"https://chatgpt.com/settings":                                          "not a ChatGPT conversation",
+		"abc-7":                                                                 "not a chat",
+	} {
+		_, _, err := ResolveChatURL(ref)
+		if err == nil || !strings.Contains(err.Error(), wantErr) {
+			t.Errorf("%s: %v, want an error naming %q", ref, err, wantErr)
+		}
+	}
+}
+
 // Perplexity fronts a web agent only: it is not a history source, has no
 // list or file operation, and the history prose leaves it out.
 func TestPerplexityIsNotAHistorySource(t *testing.T) {
