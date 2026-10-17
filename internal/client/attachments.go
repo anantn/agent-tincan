@@ -48,7 +48,11 @@ type Capabilities struct {
 	// WebLimits is set by a relay that takes a web agent's "limited"
 	// web status with its reset time. An older relay refuses that state,
 	// so a web agent sends it only when this is set.
-	WebLimits          bool  `json:"web_limits,omitempty"`
+	WebLimits bool `json:"web_limits,omitempty"`
+	// Handback is set by a relay that takes back an unsent ask from a
+	// web agent whose site is out of messages (POST
+	// /v1/requests/{id}/handback) and moves it to another web agent.
+	Handback           bool  `json:"handback,omitempty"`
 	Attachments        bool  `json:"attachments"`
 	MaxAttachmentBytes int64 `json:"max_attachment_bytes,omitempty"`
 	MaxAttachments     int   `json:"max_attachments,omitempty"`

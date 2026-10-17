@@ -215,3 +215,102 @@ func TestLimitedReportNeedsWebLimits(t *testing.T) {
 		}
 	}
 }
+
+// handbackRig is a web rig on a fake clock that starts at the real time
+// (the relay checks report times against its own), with the agent's kind
+// set and a second web chat teammate, claude-web, online to take a moved
+// ask.
+func handbackRig(t *testing.T) (*webRig, *fakeClock) {
+	t.Helper()
+	rig := newWebRig(t)
+	clk := &fakeClock{t: time.Now()}
+	rig.agent.Native = &Client{Channel: rig.browser, Cooldown: &SiteCooldown{Now: clk.Now}}
+	rig.agent.clock = clk
+	rig.mesh.JoinOnMachineOf(t, "instinct", "claude-web")
+	for name, kind := range map[string]string{"chatgpt-web": "chatgpt-web", "claude-web": "claude-web"} {
+		if ok, err := rig.mesh.Store.SetAgentKind(t.Context(), name, kind); !ok || err != nil {
+			t.Fatal(ok, err)
+		}
+	}
+	if _, err := rig.mesh.Client(t, "claude-web").Peek(t.Context(), 0); err != nil {
+		t.Fatal(err)
+	}
+	return rig, clk
+}
+
+// sendAsk sends body from from to chatgpt-web and lets the agent handle it.
+func (r *webRig) sendAsk(t *testing.T, from, body string) (*client.Relay, string) {
+	t.Helper()
+	c := r.mesh.Client(t, from)
+	req, err := c.Send(t.Context(), "chatgpt-web", body, envelope.KindAsk, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := r.agent.PollOnce(t.Context()); err != nil || n != 1 {
+		t.Fatalf("PollOnce = %d, %v", n, err)
+	}
+	return c, req.ID
+}
+
+// A 429 before the send button was clicked hands the ask back and it moves
+// to claude-web: no reply from chatgpt-web, and the asker's request now
+// names claude-web.
+func TestLimitBeforeClickHandsBack(t *testing.T) {
+	rig, _ := handbackRig(t)
+	rig.browser.sendErr, rig.browser.sendRetryAfter = "rate_limited", 900
+	c, id := rig.sendAsk(t, "codex", "summarize this paper")
+	res, err := c.Get(t.Context(), id, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Reply != nil || res.Request.To != "claude-web" || res.Status != envelope.StatusQueued {
+		t.Fatalf("asker sees %+v %s %+v", res.Request, res.Status, res.Reply)
+	}
+}
+
+// A 429 after the click replies failed as before: the message may have
+// gone out.
+func TestLimitAfterClickFails(t *testing.T) {
+	rig, _ := handbackRig(t)
+	rig.browser.sendErr, rig.browser.sendRetryAfter, rig.browser.sendClicked = "rate_limited", 900, true
+	c, id := rig.sendAsk(t, "codex", "summarize this paper")
+	res, err := c.Get(t.Context(), id, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != envelope.StatusFailed || res.Request.To != "chatgpt-web" || !strings.Contains(res.Reply.Body, "may have been sent") {
+		t.Fatalf("asker sees %+v %s %+v", res.Request, res.Status, res.Reply)
+	}
+}
+
+// While the limit runs, the next ask is handed back before anything is
+// typed and moves too.
+func TestLimitedAgentHandsBackBeforeSending(t *testing.T) {
+	rig, clk := handbackRig(t)
+	rig.agent.noteLimit(clk.Now().Add(time.Hour))
+	c, id := rig.sendAsk(t, "codex", "summarize this paper")
+	if res, err := c.Get(t.Context(), id, 0); err != nil || res.Reply != nil || res.Request.To != "claude-web" {
+		t.Fatalf("asker sees %+v %v", res, err)
+	}
+	if len(rig.browser.sent()) != 0 {
+		t.Fatalf("typed into the site: %+v", rig.browser.sent())
+	}
+}
+
+// An ask the relay will not move (409) is answered failed as before.
+func TestRefusedHandbackFails(t *testing.T) {
+	rig, clk := handbackRig(t)
+	rig.agent.noteLimit(clk.Now().Add(time.Hour))
+	c := rig.mesh.Client(t, "codex")
+	req, err := c.Send(t.Context(), "chatgpt-web", "conversation: abc123\nsummarize it", envelope.KindAsk, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := rig.agent.PollOnce(t.Context()); err != nil || n != 1 {
+		t.Fatalf("PollOnce = %d, %v", n, err)
+	}
+	res, err := c.Get(t.Context(), req.ID, 0)
+	if err != nil || res.Status != envelope.StatusFailed || res.Request.To != "chatgpt-web" {
+		t.Fatalf("asker sees %+v %v", res, err)
+	}
+}

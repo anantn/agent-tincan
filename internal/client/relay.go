@@ -682,6 +682,44 @@ func (r *Relay) Watch(ctx context.Context, agent string) (WatchResult, error) {
 	return out, err
 }
 
+// HandbackResult is what the relay did with a handed-back request:
+// Outcome HandbackMoved, to the teammate To, or HandbackRequeued, back on
+// the caller's queue and not delivered again before Until.
+type HandbackResult struct {
+	Outcome string    `json:"outcome"`
+	To      string    `json:"to,omitempty"`
+	Until   time.Time `json:"until,omitzero"`
+}
+
+// The outcomes of a handback.
+const (
+	HandbackMoved    = "moved"
+	HandbackRequeued = "requeued"
+)
+
+// ErrHandbackUnsupported means the relay predates handbacks: the web agent
+// answers the request as it did before failover.
+var ErrHandbackUnsupported = errors.New("this relay does not take handbacks (upgrade the relay)")
+
+// Handback gives back request id, which the caller (a web agent) claimed
+// and did not send because its site is out of messages until until, so
+// the relay can move it to another web agent. A 409 means the request may
+// not move and is still the caller's to answer. It checks the relay's
+// capabilities first, so an older relay is refused with
+// ErrHandbackUnsupported.
+func (r *Relay) Handback(ctx context.Context, id string, until time.Time) (HandbackResult, error) {
+	caps, err := r.Capabilities(ctx)
+	if err != nil {
+		return HandbackResult{}, fmt.Errorf("check relay capabilities: %w", err)
+	}
+	if !caps.Handback {
+		return HandbackResult{}, ErrHandbackUnsupported
+	}
+	var out HandbackResult
+	err = r.call(ctx, r.api, "POST", "/v1/requests/"+url.PathEscape(id)+"/handback", map[string]any{"reason": "limited", "until": until.UTC()}, &out)
+	return out, err
+}
+
 // Remove unbinds an agent (admin devices only).
 func (r *Relay) Remove(ctx context.Context, name string) error {
 	return r.call(ctx, r.api, "POST", "/v1/admin/remove", map[string]string{"name": name}, nil)

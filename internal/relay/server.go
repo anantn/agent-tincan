@@ -12,6 +12,7 @@ import (
 	"log"
 	"maps"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -62,6 +63,10 @@ type Config struct {
 	// AgentMail inbox for replies to its request emails while the agent's
 	// window is open; default DefaultEmailPollEvery.
 	EmailPollEvery time.Duration
+	// FailoverPath is the owner's failover.json, the web agents failover
+	// never moves an ask to; "" reads it beside the store's database, and
+	// an in-memory store has none.
+	FailoverPath string
 }
 
 func (c *Config) defaults() {
@@ -223,6 +228,11 @@ type Server struct {
 	// current silent episode, for the owner's wake notice.
 	silent map[string]silentEpisode
 
+	// failoverMu guards failoverErr, the failover.json problem last
+	// logged, so each is logged once.
+	failoverMu  sync.Mutex
+	failoverErr string
+
 	// emailMu serializes email reply polls and guards inboxes,
 	// emailCursor and emailRetry: the agents opted in to request emails,
 	// how far back each one's next poll looks, and the listed messages
@@ -262,6 +272,9 @@ func New(dir *identity.Directory, st *store.Store, cfg Config) *Server {
 		lastSeen: map[string]time.Time{}, persisted: map[string]time.Time{}, versions: loadVersions(st), blobs: defaultAttachmentDir(st), key: loadRelayKey(st),
 		versionWritten: map[string]time.Time{}, sessions: map[string]map[string]time.Time{}, socketWake: map[string]map[string]time.Time{}, workingOn: map[string]map[string]workingOnEntry{}, hostStatus: map[string]map[string]hostStatusEntry{}, silent: map[string]silentEpisode{}, stopping: make(chan struct{}), started: cfg.Now(), emailCursor: map[string]time.Time{}, emailRetry: map[string]map[string]wake.MailMessage{}}
 	s.lookupAgent = dir.Agent
+	if s.cfg.FailoverPath == "" && st != nil && st.Path() != "" {
+		s.cfg.FailoverPath = filepath.Join(filepath.Dir(st.Path()), FailoverFile)
+	}
 	s.storedVersion = maps.Clone(s.versions)
 	s.pollFeatures = map[string]pollFeatures{}
 	states, err := st.PollFeatures(context.Background())
@@ -356,6 +369,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/requests/{id}/progress", s.handleProgress)
 	mux.HandleFunc("POST /v1/requests/{id}/reply", s.handleReply)
 	mux.HandleFunc("POST /v1/requests/{id}/answer", s.handleAnswer)
+	mux.HandleFunc("POST /v1/requests/{id}/handback", s.handleHandback)
 	mux.HandleFunc("GET /v1/requests/{id}", s.handleGet)
 	mux.HandleFunc("GET /v1/groups/{id}", s.handleGroup)
 	mux.HandleFunc("POST /v1/requests/{id}/cancel", s.handleCancel)
@@ -507,6 +521,7 @@ func (s *Server) Sweep(ctx context.Context) {
 			}
 		}
 	}
+	s.failoverSweep(ctx)
 	if err := s.store.ExpireWatches(ctx); err != nil {
 		log.Printf("watches: expire: %v", err)
 	}
@@ -724,10 +739,15 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, envelope.SendResponse{Request: req, Target: s.recipientTarget(r.Context(), req.To)})
 		return
 	}
-	s.hub.notify(inboxKey(req.To))
 	s.record(r.Context(), "queued", req.ID, req.TraceID, from, store.DetailJSON(map[string]any{"to": req.To, "hop": req.Hop, "chain": req.Chain}))
-	if s.events != nil {
-		s.events.Queued(r.Context(), req)
+	// An ask to a web agent that is out of messages moves before anyone
+	// is told of it; the move wakes the new target itself.
+	moved := false
+	if req, moved = s.failoverQueued(r.Context(), req); !moved {
+		s.hub.notify(inboxKey(req.To))
+		if s.events != nil {
+			s.events.Queued(r.Context(), req)
+		}
 	}
 	writeJSON(w, http.StatusCreated, envelope.SendResponse{Request: req, Target: s.recipientTarget(r.Context(), req.To)})
 }

@@ -232,6 +232,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate watches: %w", err)
 	}
+	if err := s.migrateFailover(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate failover: %w", err)
+	}
 	for {
 		more, err := s.backfillSearchBatch()
 		if err != nil {
@@ -762,7 +766,7 @@ func (s *Store) enqueueTx(ctx context.Context, tx *sql.Tx, req envelope.Request,
 // Deliver hands up to limit queued requests for agent to its poller, marking
 // them delivered under a lease. A request delivered but never claimed returns
 // to the queue when the lease runs out, so a crash after polling strands
-// nothing.
+// nothing. A request held back (HoldBack) waits until its time.
 // maxDeliverBytes bounds the request text one poll delivers, so a batch of
 // large or resumed requests (which carry their clarification exchanges) stays
 // well inside a client's response limit. The oldest request always goes out,
@@ -775,12 +779,12 @@ func (s *Store) Deliver(ctx context.Context, agent string, limit int, lease time
 		WHERE id IN (SELECT id FROM (
 			SELECT id, SUM(length(body) + length(exchanges)) OVER (ORDER BY urgent DESC, created_at, rowid) AS running,
 				ROW_NUMBER() OVER (ORDER BY urgent DESC, created_at, rowid) AS n
-			FROM requests WHERE to_agent = ? AND status = ? AND expires_at > ?
+			FROM requests WHERE to_agent = ? AND status = ? AND expires_at > ? AND deliver_after <= ?
 			ORDER BY urgent DESC, created_at, rowid LIMIT ?
 		) WHERE n = 1 OR running <= ?)
 		RETURNING `+requestCols,
 		string(envelope.StatusDelivered), now.Add(lease).UnixMilli(), now.UnixMilli(),
-		agent, string(envelope.StatusQueued), now.UnixMilli(), limit, maxDeliverBytes)
+		agent, string(envelope.StatusQueued), now.UnixMilli(), now.UnixMilli(), limit, maxDeliverBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -995,21 +999,21 @@ func (s *Store) ClaimLeasesFrom(ctx context.Context, id, agent, session string, 
 		return envelope.Request{}, err
 	}
 	if req.To != agent {
-		return envelope.Request{}, ErrForbidden
+		return envelope.Request{}, notTarget(req, agent)
 	}
 	now := s.now()
 	res, err := s.db.ExecContext(ctx, `UPDATE requests SET status = ?, lease_until = CASE WHEN kind = ? THEN 0 WHEN urgent = 1 THEN ? ELSE ? END,
 		claimed_at = CASE WHEN status = ? THEN claimed_at ELSE ? END,
 		claim_session = CASE WHEN status = ? THEN claim_session ELSE ? END, updated_at = ?, lease_lapsed_at = NULL
-		WHERE id = ? AND status IN (?, ?, ?) AND expires_at > ?`,
+		WHERE id = ? AND to_agent = ? AND status IN (?, ?, ?) AND expires_at > ?`,
 		string(envelope.StatusClaimed), string(envelope.KindNotify), now.Add(urgentLease).UnixMilli(), now.Add(lease).UnixMilli(),
-		string(envelope.StatusClaimed), now.UnixMilli(), string(envelope.StatusClaimed), session, now.UnixMilli(), id,
+		string(envelope.StatusClaimed), now.UnixMilli(), string(envelope.StatusClaimed), session, now.UnixMilli(), id, agent,
 		string(envelope.StatusQueued), string(envelope.StatusDelivered), string(envelope.StatusClaimed), now.UnixMilli())
 	if err != nil {
 		return envelope.Request{}, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return envelope.Request{}, ErrWrongState
+		return envelope.Request{}, s.wrongState(ctx, id, agent)
 	}
 	req, _, err = s.lookup(ctx, id)
 	return req, err
@@ -1040,7 +1044,7 @@ func (s *Store) SetProgressLeases(ctx context.Context, id, claimer, note string,
 		return err
 	}
 	if n == 0 {
-		return ErrWrongState
+		return s.wrongState(ctx, id, claimer)
 	}
 	return nil
 }
@@ -1053,7 +1057,7 @@ func (s *Store) Reply(ctx context.Context, id, agent string, rep envelope.Reply)
 		return envelope.Reply{}, err
 	}
 	if req.To != agent {
-		return envelope.Reply{}, ErrForbidden
+		return envelope.Reply{}, notTarget(req, agent)
 	}
 	if rep.Status == envelope.StatusNeedsInput {
 		return s.needsInput(ctx, id, agent, rep)
@@ -1064,6 +1068,10 @@ func (s *Store) Reply(ctx context.Context, id, agent string, rep envelope.Reply)
 	}
 	defer tx.Rollback()
 	if rep, err = s.replyTx(ctx, tx, id, agent, rep, false); err != nil {
+		if errors.Is(err, ErrWrongState) {
+			_ = tx.Rollback()
+			err = s.wrongState(ctx, id, agent)
+		}
 		return envelope.Reply{}, err
 	}
 	return rep, tx.Commit()
@@ -1072,10 +1080,11 @@ func (s *Store) Reply(ctx context.Context, id, agent string, rep envelope.Reply)
 // replyTx closes open request id with agent's terminal reply rep inside tx:
 // the request takes rep's status and the reply row is written. byEmail adds
 // the email path's conditions (emailReplyGuard). It returns ErrWrongState
-// when the request is no longer open or fails those conditions.
+// when the request is no longer open, no longer agent's (it moved), or
+// fails those conditions.
 func (s *Store) replyTx(ctx context.Context, tx *sql.Tx, id, agent string, rep envelope.Reply, byEmail bool) (envelope.Reply, error) {
 	now := s.now()
-	args := []any{string(rep.Status), now.UnixMilli(), now.UnixMilli(), id,
+	args := []any{string(rep.Status), now.UnixMilli(), now.UnixMilli(), id, agent,
 		string(envelope.StatusQueued), string(envelope.StatusDelivered), string(envelope.StatusClaimed)}
 	where := ""
 	if byEmail {
@@ -1083,7 +1092,7 @@ func (s *Store) replyTx(ctx context.Context, tx *sql.Tx, id, agent string, rep e
 		args = append(args, now.UnixMilli())
 	}
 	res, err := tx.ExecContext(ctx, `UPDATE requests SET status = ?, lease_until = 0, updated_at = ?, reply_seen_at = CASE WHEN kind = 'ping' THEN ? ELSE 0 END, reply_generation = reply_generation + 1, lease_lapsed_at = NULL
-		WHERE id = ? AND status IN (?, ?, ?)`+where, args...)
+		WHERE id = ? AND to_agent = ? AND status IN (?, ?, ?)`+where, args...)
 	if err != nil {
 		return envelope.Reply{}, err
 	}
@@ -1116,6 +1125,7 @@ func (s *Store) Get(ctx context.Context, id, agent string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	// A target the request moved off no longer finds it.
 	if req.From != agent && req.To != agent {
 		return Result{}, ErrNotFound
 	}
@@ -1317,20 +1327,25 @@ func (s *Store) Request(ctx context.Context, id string) (envelope.Request, envel
 	return s.lookup(ctx, id)
 }
 
-const requestCols = `id, from_agent, to_agent, parent_id, trace_id, hop, chain, kind, body, status, created_at, attachments, exchanges, resumed, was_held, approved, group_id, urgent, progress_note, progress_at`
+const requestCols = `id, from_agent, to_agent, parent_id, trace_id, hop, chain, kind, body, status, created_at, attachments, exchanges, resumed, was_held, approved, group_id, urgent, progress_note, progress_at, moved_from`
 
 type scanner interface{ Scan(dest ...any) error }
 
 func scanRequest(sc scanner) (envelope.Request, envelope.Status, error) {
 	var r envelope.Request
-	var chain, kind, status, atts, exchanges string
+	var chain, kind, status, atts, exchanges, movedFrom string
 	var created, progressAt int64
 	var note string
-	if err := sc.Scan(&r.ID, &r.From, &r.To, &r.ParentID, &r.TraceID, &r.Hop, &chain, &kind, &r.Body, &status, &created, &atts, &exchanges, &r.Resumed, &r.WasHeld, &r.Approved, &r.Group, &r.Urgent, &note, &progressAt); err != nil {
+	if err := sc.Scan(&r.ID, &r.From, &r.To, &r.ParentID, &r.TraceID, &r.Hop, &chain, &kind, &r.Body, &status, &created, &atts, &exchanges, &r.Resumed, &r.WasHeld, &r.Approved, &r.Group, &r.Urgent, &note, &progressAt, &movedFrom); err != nil {
 		return envelope.Request{}, "", err
 	}
 	if err := json.Unmarshal([]byte(chain), &r.Chain); err != nil {
 		return envelope.Request{}, "", err
+	}
+	if movedFrom != "" {
+		if err := json.Unmarshal([]byte(movedFrom), &r.MovedFrom); err != nil {
+			return envelope.Request{}, "", err
+		}
 	}
 	if err := json.Unmarshal([]byte(exchanges), &r.Exchanges); err != nil {
 		return envelope.Request{}, "", err

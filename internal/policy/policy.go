@@ -135,6 +135,39 @@ func (p *Policy) Prepare(ctx context.Context, req *envelope.Request) error {
 	return nil
 }
 
+// ErrMoveHeld refuses moving a request to a target whose asks are held
+// for the owner: the owner approved nothing for that target.
+var ErrMoveHeld = errors.New("asks to this agent wait for the owner's approval")
+
+// CheckMove runs the send checks on an existing request for a new target,
+// to, as failover moves it there (relay.MoveChecker): the chain must not
+// loop back to to, the hop limit still holds, and neither approval.json
+// nor a kind's default hold would hold an ask to to. A move that would be
+// held is refused rather than held. The sender's rate is not charged: the
+// request was already sent.
+func (p *Policy) CheckMove(ctx context.Context, req envelope.Request, to string) error {
+	if slices.Contains(req.Chain, to) || req.From == to {
+		return reject(http.StatusConflict, fmt.Errorf("%w: %s is already in %v", ErrCycle, to, req.Chain))
+	}
+	if req.Hop > p.cfg.HopLimit {
+		return reject(http.StatusConflict, fmt.Errorf("%w: hop %d exceeds %d", ErrHopLimit, req.Hop, p.cfg.HopLimit))
+	}
+	moved := req
+	moved.To, moved.Status = to, ""
+	held, err := p.cfg.Approval.Held(&moved)
+	if err != nil {
+		return reject(http.StatusServiceUnavailable, err)
+	}
+	if !held {
+		p.holdByKind(ctx, &moved, envelope.Request{}, false)
+		held = moved.Status == envelope.StatusHeld
+	}
+	if held {
+		return reject(http.StatusConflict, fmt.Errorf("%w: %s", ErrMoveHeld, to))
+	}
+	return nil
+}
+
 // holdByDefault lists the target kinds whose asks and notifies wait for the
 // owner's approval even with no approval.json entry. A council sends the ask
 // on to every model vendor on the team. dot-web types each request into the

@@ -101,6 +101,11 @@ type Request struct {
 	// advertises support.
 	Attachments []Attachment `json:"attachments,omitempty"`
 	CreatedAt   time.Time    `json:"created_at,omitzero"`
+	// MovedFrom names, oldest first, the web agents this request moved off
+	// because their site was out of messages before it was sent there
+	// (failover). The relay sets it; a send cannot. Empty from relays that
+	// predate failover.
+	MovedFrom []string `json:"moved_from,omitempty"`
 	// Progress is store metadata; the wire exposes it on Result.
 	Progress *Progress `json:"-"`
 

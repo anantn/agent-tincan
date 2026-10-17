@@ -465,6 +465,8 @@ func (w *WebAgent) Handle(ctx context.Context, req envelope.Request) {
 		why := "rate-limited"
 		if errors.Is(cerr, ErrBlocked) {
 			why = "held back after an anti-bot check"
+		} else if until := w.Native.cooldown().LimitedUntil(w.Site); !until.IsZero() && !images && w.handBack(ctx, req, until) {
+			return
 		}
 		w.logf("request %s from %s: %s is %s for another %s; not sending", req.ID, req.From, label, why, left.Round(time.Second))
 		w.reply(ctx, req, w.sendFailure(cerr, ""), envelope.StatusFailed, nil)
@@ -545,7 +547,9 @@ func (w *WebAgent) Handle(ctx context.Context, req envelope.Request) {
 		until, limited := w.sendLimit(err)
 		var ue *UnavailableError
 		if limited && !images && errors.As(err, &ue) && !ue.Clicked {
-			w.reply(ctx, req, w.limitReply(until), envelope.StatusFailed, nil)
+			if !w.handBack(ctx, req, until) {
+				w.reply(ctx, req, w.limitReply(until), envelope.StatusFailed, nil)
+			}
 			return
 		}
 		if images {
@@ -769,6 +773,31 @@ func sourcesFooter(srcs []webSource) string {
 
 // rateLimitReply is the answer while the site rate-limits the account.
 func (w *WebAgent) rateLimitReply() string { return rateLimitMessage(w.Site) + "." }
+
+// handBack gives req, claimed and not typed into the site, back to the
+// relay because the site is out of messages until until, so the relay can
+// move it to another web agent (or hold it until then). The limit is
+// reported first: the relay caps a handback at the limit the agent last
+// reported. It reports whether the relay took the request; when it did
+// not (a request that may not move, or a relay older than handbacks), the
+// request is still this agent's to answer.
+func (w *WebAgent) handBack(ctx context.Context, req envelope.Request, until time.Time) bool {
+	if err := w.flushWebStatus(ctx); err != nil {
+		w.logf("request %s: reporting the usage limit: %v", req.ID, err)
+	}
+	res, err := w.Relay.Handback(ctx, req.ID, until)
+	switch {
+	case err == nil && res.Outcome == client.HandbackMoved:
+		w.logf("request %s from %s: not sent; handed back and moved to %s", req.ID, req.From, res.To)
+		return true
+	case err == nil:
+		w.logf("request %s from %s: not sent; handed back to wait until %s", req.ID, req.From, res.Until.Local().Format(time.RFC3339))
+		return true
+	case !errors.Is(err, client.ErrHandbackUnsupported):
+		w.logf("request %s from %s: handback: %v", req.ID, req.From, err)
+	}
+	return false
+}
 
 // limitReply is the answer to a request not sent because the site is out
 // of messages until until.
