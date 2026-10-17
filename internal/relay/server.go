@@ -1058,6 +1058,9 @@ func (s *Server) unseenReplies(ctx context.Context, agent string, scope store.Re
 	if err != nil {
 		return nil, 0, err
 	}
+	if err := s.redactRooms(ctx, reps, agent); err != nil {
+		return nil, 0, err
+	}
 	cut := len(reps) == store.MaxUnseenReplies // the store may hold more
 	size := 0
 	for i, rep := range reps {
@@ -1369,7 +1372,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	defer deadline.Stop()
 	for {
 		wake := s.hub.wait(requestKey(id))
-		res, err := s.store.Get(r.Context(), id, name)
+		res, err := s.getAs(r.Context(), id, name)
 		if err != nil {
 			writeErr(w, statusFor(err), err)
 			return
@@ -1386,7 +1389,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		}
-		res, err = s.store.Get(r.Context(), id, name)
+		res, err = s.getAs(r.Context(), id, name)
 		if err != nil {
 			writeErr(w, statusFor(err), err)
 			return
@@ -1394,6 +1397,18 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, res)
 		return
 	}
+}
+
+// getAs is the store's Get with a mention's room text hidden from a reader
+// that may not read the room now (redactRooms).
+func (s *Server) getAs(ctx context.Context, id, reader string) (envelope.Result, error) {
+	res, err := s.store.Get(ctx, id, reader)
+	if err != nil {
+		return res, err
+	}
+	one := []envelope.Result{res}
+	err = s.redactRooms(ctx, one, reader)
+	return one[0], err
 }
 
 func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
