@@ -304,6 +304,63 @@ func TestFormatResultUnansweredWake(t *testing.T) {
 	}
 }
 
+// A pending request says how its target wakes and whether it is listening
+// now, one line per method and state, before the usual pending text. The
+// methods whose facts already have their own line (schedule, webhook,
+// email) get no new one.
+func TestFormatResultWakeNote(t *testing.T) {
+	base := client.Result{Request: envelope.Request{ID: "r1", To: "muse"}, Status: envelope.StatusQueued}
+	plain := client.FormatResult(base)
+	for _, tc := range []struct {
+		via       string
+		listening bool
+		note      string
+	}{
+		{"socket", true, "muse is listening now; a session will be prompted when it is idle.\n"},
+		{"socket", false, "muse is not connected; the request waits until a session opens.\n"},
+		{"channel", true, "muse is listening now; a session started without channels may not see it until its next turn.\n"},
+		{"channel", false, "muse is not connected; the request waits until a session opens.\n"},
+		{"wait", true, "muse is listening now and will start a turn when it picks this up.\n"},
+		{"wait", false, "muse's listener is not running; the request waits until it restarts.\n"},
+		{"command", true, "muse is listening now and will start a turn when it picks this up.\n"},
+		{"command", false, "muse's listener is not running; the request waits until it restarts.\n"},
+		{"none", true, "muse checks only when its owner next prompts it.\n"},
+		{"none", false, "muse checks only when its owner next prompts it.\n"},
+		{"webhook", true, ""},
+		{"webhook", false, ""},
+		{"email", false, ""},
+		{"schedule", true, ""},
+		{"schedule", false, ""},
+	} {
+		r := base
+		r.Target = &envelope.Target{WakeVia: tc.via, Listening: tc.listening}
+		if got := client.FormatResult(r); got != tc.note+plain {
+			t.Errorf("%s listening=%v = %q, want %q", tc.via, tc.listening, got, tc.note+plain)
+		}
+	}
+	// The existing schedule and wake lines stay as they were, with nothing
+	// added after them.
+	sched := base
+	sched.Target = &envelope.Target{WakeVia: "schedule", CheckEverySeconds: 300, ExpectReplySeconds: 600}
+	if got, want := client.FormatResult(sched), "muse checks its inbox every 5m; expect a reply within about 10m.\n"+plain; got != want {
+		t.Errorf("schedule = %q, want %q", got, want)
+	}
+	woke := time.Now()
+	stuck := base
+	stuck.Target = &envelope.Target{WakeVia: "webhook", WokenAt: woke, WakeResult: "ok", Unanswered: true}
+	if got, want := client.FormatResult(stuck), "muse was woken at "+woke.Format("15:04")+" and has not checked in yet; the request is queued.\n"+plain; got != want {
+		t.Errorf("webhook unanswered = %q, want %q", got, want)
+	}
+	// A relay that predates the wake facts sends none, and the text is
+	// exactly what it was before them.
+	if got := client.FormatResult(client.Result{Request: base.Request, Status: base.Status, Target: &envelope.Target{}}); got != plain {
+		t.Errorf("no wake facts = %q, want %q", got, plain)
+	}
+	if plain != "No reply yet from muse. Request id r1 (status queued). Check later with get_reply or `tincan get r1`.\n" {
+		t.Errorf("nil target = %q", plain)
+	}
+}
+
 // A pending request shows the relay's note, on one line, before the usual
 // pending text; one without a note is unchanged.
 func TestFormatResultRelayNote(t *testing.T) {

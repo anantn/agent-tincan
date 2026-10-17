@@ -239,17 +239,21 @@ func TestSocketWakeSkipsUpgradeNotice(t *testing.T) {
 
 // A socket that keeps failing ends the loop, so the agent stops peeking and
 // stops looking online; socketWake then keeps the session live without
-// polling until the socket checks out again.
+// polling until the socket checks out again. Its peeks advertise socket
+// wake and the keepalive after them does not.
 func TestSocketWakeStopsPeekingWhenSocketFails(t *testing.T) {
 	fastChannel(t, 10*time.Millisecond, time.Hour)
 	var polls, whoami atomic.Int32
+	var peekFeatures, keepFeatures atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/poll":
+			peekFeatures.Store(r.Header.Get(client.FeaturesHeader))
 			polls.Add(1)
 			n := polls.Load()
 			_ = json.NewEncoder(w).Encode(map[string]any{"waiting": 1, "queued": 1, "pending": []map[string]string{{"id": "q" + string(rune('0'+n%10)), "from": "grokbot"}}})
 		case "/v1/whoami":
+			keepFeatures.Store(r.Header.Get(client.FeaturesHeader))
 			whoami.Add(1)
 			_ = json.NewEncoder(w).Encode(map[string]any{"agent": "muse"})
 		default:
@@ -290,6 +294,12 @@ func TestSocketWakeStopsPeekingWhenSocketFails(t *testing.T) {
 	}
 	if before > socketFailLimit {
 		t.Fatalf("peeks before giving up = %d, want at most %d", before, socketFailLimit)
+	}
+	if got := peekFeatures.Load(); got != "ping,socket-wake" {
+		t.Fatalf("peek features = %v, want ping,socket-wake", got)
+	}
+	if got := keepFeatures.Load(); got != "ping" {
+		t.Fatalf("keepalive features = %v, want ping", got)
 	}
 }
 

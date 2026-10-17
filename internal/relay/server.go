@@ -188,6 +188,11 @@ type Server struct {
 	// so a poll can tell a session that is still running from one that is
 	// gone. In memory only; see replyScope.
 	sessions map[string]map[string]time.Time
+	// socketWake is when each agent's sessions last polled advertising
+	// client.SocketWakeFeature, so a send can tell the asker the target
+	// wakes by socket. A session's entry goes when it polls without the
+	// feature, and lapses after SessionGrace. In memory only.
+	socketWake map[string]map[string]time.Time
 	// started is when this relay process started. lastPoll is not
 	// persisted, so a schedule agent that has not polled since then is
 	// measured from here rather than flagged overdue by a restart.
@@ -242,7 +247,7 @@ func New(dir *identity.Directory, st *store.Store, cfg Config) *Server {
 	cfg.defaults()
 	s := &Server{cfg: cfg, dir: dir, store: st, hub: newHub(), prep: newChain{}, lastPoll: map[string]time.Time{}, polling: map[string]int{},
 		lastSeen: map[string]time.Time{}, persisted: map[string]time.Time{}, versions: loadVersions(st), blobs: defaultAttachmentDir(st), key: loadRelayKey(st),
-		versionWritten: map[string]time.Time{}, sessions: map[string]map[string]time.Time{}, silent: map[string]silentEpisode{}, stopping: make(chan struct{}), started: cfg.Now(), emailCursor: map[string]time.Time{}, emailRetry: map[string]map[string]wake.MailMessage{}}
+		versionWritten: map[string]time.Time{}, sessions: map[string]map[string]time.Time{}, socketWake: map[string]map[string]time.Time{}, silent: map[string]silentEpisode{}, stopping: make(chan struct{}), started: cfg.Now(), emailCursor: map[string]time.Time{}, emailRetry: map[string]map[string]wake.MailMessage{}}
 	s.lookupAgent = dir.Agent
 	s.storedVersion = maps.Clone(s.versions)
 	s.pollFeatures = map[string]pollFeatures{}
@@ -517,21 +522,28 @@ func (s *Server) agent(w http.ResponseWriter, r *http.Request) string {
 		}))
 	}
 	s.seen(r.Context(), res.Name, r.Header.Get(client.VersionHeader))
-	if sess, err := session(r); err == nil {
+	sess, sessErr := session(r)
+	if sessErr == nil {
 		s.touchSession(res.Name, sess)
 	}
 	markHeld(r, res.Name)
 	if r.Method == http.MethodGet && r.URL.Path == "/v1/poll" {
-		supported := false
+		supported, socketWake := false, false
 		for f := range strings.SplitSeq(r.Header.Get(client.FeaturesHeader), ",") {
-			if strings.TrimSpace(f) == "ping" {
+			switch strings.TrimSpace(f) {
+			case "ping":
 				supported = true
+			case client.SocketWakeFeature:
+				socketWake = true
 			}
 		}
 		now := s.cfg.Now()
 		s.pollMu.Lock()
 		defer s.pollMu.Unlock()
 		s.mu.Lock()
+		if sessErr == nil && sess != "" {
+			s.noteSocketWake(res.Name, sess, socketWake, now)
+		}
 		old := s.pollFeatures[res.Name]
 		state := old
 		if supported {
@@ -697,10 +709,18 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 }
 
 // recipientTarget is the schedule facts for agent on wake method schedule,
-// its last wake for an agent the relay wakes, and nil otherwise. A failed
-// join-time lookup measures from the relay's start.
+// its last wake for an agent the relay wakes, and how it wakes and whether
+// it is listening for every agent whose wake method the relay knows; nil
+// when it has none of these. A failed join-time lookup measures from the
+// relay's start.
 func (s *Server) recipientTarget(ctx context.Context, agent string) *envelope.Target {
 	t := s.recipientActivity(ctx, agent)
+	if via, listening := s.wakeVia(agent); via != "" {
+		if t == nil {
+			t = &envelope.Target{}
+		}
+		t.WakeVia, t.Listening = via, listening
+	}
 	facts, err := s.store.WebStatuses(ctx)
 	if err == nil {
 		if a, ok, err := s.dir.Agent(ctx, agent); err == nil && ok {
@@ -713,6 +733,26 @@ func (s *Server) recipientTarget(ctx context.Context, agent string) *envelope.Ta
 		}
 	}
 	return t
+}
+
+// wakeVia is how the relay reaches agent: "socket" while one of its
+// sessions has advertised socket wake within SessionGrace, else its
+// configured wake method, and "" with no wake config. listening is the
+// roster's online test.
+func (s *Server) wakeVia(agent string) (via string, listening bool) {
+	if s.wake != nil {
+		via = s.wake.WakeMethod(agent)
+	}
+	now := s.cfg.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, t := range s.socketWake[agent] {
+		if now.Sub(t) < SessionGrace {
+			via = "socket"
+			break
+		}
+	}
+	return via, s.polledRecently(s.lastPoll[agent], now)
 }
 
 func (s *Server) recipientActivity(ctx context.Context, agent string) *envelope.Target {
@@ -1030,6 +1070,30 @@ func (s *Server) touchSession(agent, session string) {
 		if now.Sub(t) >= SessionGrace {
 			delete(m, k)
 		}
+	}
+}
+
+// noteSocketWake records whether agent's session advertised socket wake on
+// a poll at now, and forgets the agent's socket-wake sessions quiet past
+// SessionGrace. The caller holds s.mu.
+func (s *Server) noteSocketWake(agent, session string, on bool, now time.Time) {
+	m := s.socketWake[agent]
+	if on {
+		if m == nil {
+			m = map[string]time.Time{}
+			s.socketWake[agent] = m
+		}
+		m[session] = now
+	} else {
+		delete(m, session)
+	}
+	for k, t := range m {
+		if now.Sub(t) >= SessionGrace {
+			delete(m, k)
+		}
+	}
+	if len(m) == 0 {
+		delete(s.socketWake, agent)
 	}
 }
 

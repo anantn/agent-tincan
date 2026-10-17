@@ -230,9 +230,13 @@ func TestErrorsComeBackAsToolErrors(t *testing.T) {
 	}
 }
 
-// Parity: the MCP ask and the client ask render the same result.
+// Parity: the MCP ask and the client ask render the same result, including
+// the note on how the target wakes.
 func TestMCPAndClientAgree(t *testing.T) {
 	m := testrelay.New(t, relay.Config{MaxWait: time.Second})
+	w := wake.New(wake.Config{"muse": {Method: wake.None}}, m.Store, wake.Options{})
+	t.Cleanup(w.Stop)
+	m.Server.SetWakeNamer(w)
 	viaMCP := call(t, session(t, m, "grokbot"), "ask", map[string]any{"to": "muse", "message": "x", "wait_seconds": 1})
 	res, err := m.Client(t, "grokbot").Ask(context.Background(), "muse", "x", "", time.Second, false)
 	if err != nil {
@@ -242,6 +246,9 @@ func TestMCPAndClientAgree(t *testing.T) {
 	norm := func(s string) string { return strings.Split(strings.TrimSpace(s), " Request id")[0] }
 	if norm(viaMCP) != norm(viaCLI) {
 		t.Fatalf("mcp %q vs client %q", viaMCP, viaCLI)
+	}
+	if !strings.Contains(viaMCP, "muse checks only when its owner next prompts it.") {
+		t.Fatalf("mcp ask has no wake note: %q", viaMCP)
 	}
 }
 

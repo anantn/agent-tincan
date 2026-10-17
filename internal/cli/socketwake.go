@@ -57,6 +57,11 @@ func pushSocket(ctx context.Context, r *client.Relay, t socketTarget, shared soc
 		return nil
 	case <-t.Ready():
 	}
+	// The peeks below tell the relay this session wakes by socket, so an
+	// asker hears it will be prompted. Once the loop ends nothing pushes,
+	// so the advert stops with it.
+	r.AdvertiseSocketWake(true)
+	defer r.AdvertiseSocketWake(false)
 	own := map[string]bool{} // own reply keys already pushed and still waiting
 	var retries client.PongRetries
 	defer retries.Wait()

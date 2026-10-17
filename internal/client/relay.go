@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
@@ -41,6 +42,11 @@ const SessionHeader = "X-Tincan-Session"
 
 // FeaturesHeader advertises capabilities supported by this client.
 const FeaturesHeader = "X-Tincan-Features"
+
+// SocketWakeFeature is the FeaturesHeader value a client adds while it wakes
+// its Claude Code session through the session's own socket, so the relay can
+// tell an asker that the session will be prompted.
+const SocketWakeFeature = "socket-wake"
 
 // PlatformHeader carries the client's os_arch (for example darwin_arm64), so
 // the relay only announces a release it holds a binary for.
@@ -207,6 +213,9 @@ type Relay struct {
 	agent    string // sent as AgentHeader when set
 	version  string // sent as VersionHeader when set
 	session  string // sent as SessionHeader when set
+	// socketWake adds SocketWakeFeature to FeaturesHeader. It is atomic
+	// because the socket-wake loop flips it while other calls are in flight.
+	socketWake atomic.Bool
 
 	heldMu  sync.Mutex
 	held    []envelope.Held // from the last response's HeldHeader
@@ -768,7 +777,11 @@ func (r *Relay) headers(req *http.Request) {
 	if r.agent != "" {
 		req.Header.Set(AgentHeader, r.agent)
 	}
-	req.Header.Set(FeaturesHeader, "ping")
+	features := "ping"
+	if r.socketWake.Load() {
+		features += "," + SocketWakeFeature
+	}
+	req.Header.Set(FeaturesHeader, features)
 	if r.version != "" {
 		req.Header.Set(VersionHeader, r.version)
 	}
@@ -784,6 +797,10 @@ func (r *Relay) SetSession(session string) { r.session = session }
 
 // Session is the session set by SetSession.
 func (r *Relay) Session() string { return r.session }
+
+// AdvertiseSocketWake turns SocketWakeFeature on or off for every later
+// call. It is safe to call while the client is in use.
+func (r *Relay) AdvertiseSocketWake(on bool) { r.socketWake.Store(on) }
 
 // ProxyAuthError is a relay call the proxy refused with HTTP 407: the proxy
 // credentials have expired or are wrong, and the config offered nothing
