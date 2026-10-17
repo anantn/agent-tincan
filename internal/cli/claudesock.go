@@ -39,8 +39,11 @@ type claudeSocketPusher struct {
 	token    string
 	registry string
 	ppid     int
-	verified bool
-	ready    chan struct{}
+	// procStart is the registered process's start time when verified, so
+	// idle can tell the session from a later process given the same pid.
+	procStart string
+	verified  bool
+	ready     chan struct{}
 }
 
 // newClaudeSocketPusher reads the session's socket path and token from
@@ -71,6 +74,7 @@ func newClaudeSocketPusher(getenv func(string) string, ppid int) (*claudeSocketP
 	if s.MessagingSocketPath != p.socket {
 		return p, fmt.Errorf("claude session socket %s: registry %s names socket %s", p.socket, p.registry, s.MessagingSocketPath)
 	}
+	p.procStart = s.ProcStart
 	p.verified = true
 	close(p.ready)
 	return p, nil

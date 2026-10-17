@@ -67,6 +67,7 @@ func (r *Relay) SendEach(ctx context.Context, outs []Outgoing, kind envelope.Kin
 			var sent envelope.Request
 			if err = r.call(ctx, r.api, "POST", "/v1/send", req, &sent); err == nil {
 				req = sent
+				r.noteSent(req.ID)
 			}
 		}
 		res := Result{Request: req, Status: sentStatus(req)}

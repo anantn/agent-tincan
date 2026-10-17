@@ -234,6 +234,34 @@ type Relay struct {
 	proxyMu   sync.Mutex
 	proxy     *url.URL
 	proxyFile string
+
+	// sentIDs are the requests this client sent, so a caller can tell a
+	// reply to its own ask from one the relay shows every session.
+	sentMu  sync.Mutex
+	sentIDs map[string]bool
+}
+
+// maxSentIDs bounds sentIDs. Past it the record starts over, and a reply
+// to a forgotten ask is treated like one the relay shows every session.
+const maxSentIDs = 4096
+
+func (r *Relay) noteSent(id string) {
+	if id == "" {
+		return
+	}
+	r.sentMu.Lock()
+	defer r.sentMu.Unlock()
+	if r.sentIDs == nil || len(r.sentIDs) >= maxSentIDs {
+		r.sentIDs = map[string]bool{}
+	}
+	r.sentIDs[id] = true
+}
+
+// SentHere reports whether this client sent request id.
+func (r *Relay) SentHere(id string) bool {
+	r.sentMu.Lock()
+	defer r.sentMu.Unlock()
+	return r.sentIDs[id]
 }
 
 // NewRelay returns a client for the relay at base (for example
@@ -340,6 +368,9 @@ type sent = envelope.SendResponse
 func (r *Relay) send(ctx context.Context, in map[string]any) (sent, error) {
 	var out sent
 	err := r.call(ctx, r.api, "POST", "/v1/send", in, &out)
+	if err == nil {
+		r.noteSent(out.ID)
+	}
 	return out, err
 }
 
@@ -1014,6 +1045,7 @@ func (r *Relay) SendGroup(ctx context.Context, targets []string, body string, ki
 			if err == nil {
 				req = sent.Request
 				target = sent.Target
+				r.noteSent(req.ID)
 			}
 		}
 		res := Result{Request: req, Status: sentStatus(req), Target: target}
