@@ -2,6 +2,8 @@ package pass
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -278,5 +280,101 @@ func TestPassServeRefusesWithoutPassKind(t *testing.T) {
 	res, err := m.Client(t, "grokbot").Get(t.Context(), req.ID, 0)
 	if err != nil || res.Status != envelope.StatusQueued {
 		t.Fatalf("the ask after a refused start: %s %v", res.Status, err)
+	}
+}
+
+// A destination that fails after the seed went out did not confirm the
+// new chat, but the chat was sent: the reply says so, with the status and
+// the destination's reason, and never "Nothing was passed".
+func TestPassUnconfirmedSeedSaysItWasSent(t *testing.T) {
+	r := newPassRig(t, GuardVersion)
+	fakeWeb(t, r.web, nil, func(envelope.Request) (string, envelope.Status) {
+		return "Sorry, ChatGPT did not finish answering in time. The message was sent; the conversation is newconv-9.", envelope.StatusFailed
+	})
+	res := r.ask(t, "grokbot", "from: claude-ai abc-3\nto: chatgpt-web")
+	body := res.Reply.Body
+	if res.Status != envelope.StatusFailed || strings.Contains(body, "Nothing was passed") || !strings.Contains(body, "was sent to chatgpt-web") ||
+		!strings.Contains(body, "did not confirm") || !strings.Contains(body, "(failed)") || !strings.Contains(body, "did not finish answering in time") {
+		t.Fatalf("%s %q", res.Status, body)
+	}
+}
+
+// A redelivered ask whose seed already went out waits for that seed:
+// it reads nothing, sends no second seed, and answers from the first.
+func TestPassRedeliveryReusesSentSeed(t *testing.T) {
+	r := newPassRig(t, GuardVersion)
+	c := r.mesh.Client(t, "grokbot")
+	req, err := c.Send(t.Context(), "pass", "from: claude-ai abc-3\nto: chatgpt-web", envelope.KindAsk, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.mesh.Client(t, "admin").Raw(t.Context(), "POST", "/v1/admin/requests/"+req.ID+"/approve", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The first delivery sent its seed before the service stopped.
+	claimed, err := r.svc.Relay.Claim(t.Context(), req.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.svc.Relay.SendGrouped(t.Context(), "chatgpt-web", "new chat\nthe first seed", envelope.KindAsk, req.ID, "pass-"+req.ID); err != nil {
+		t.Fatal(err)
+	}
+	got := fakeWeb(t, r.web, nil, func(envelope.Request) (string, envelope.Status) {
+		return "ChatGPT conversation: newconv-8", envelope.StatusAnswered
+	})
+	r.svc.Handle(t.Context(), claimed)
+	res, err := c.Get(t.Context(), req.ID, 0)
+	if err != nil || res.Status != envelope.StatusAnswered || res.Reply == nil || !strings.Contains(res.Reply.Body, "newconv-8") {
+		t.Fatalf("reply: %+v %v", res, err)
+	}
+	if seed := <-got; seed.Body != "new chat\nthe first seed" {
+		t.Fatalf("the destination got %q, not the first seed", seed.Body)
+	}
+	members, err := r.svc.Relay.GroupMembers(t.Context(), "pass-"+req.ID)
+	if err != nil || len(members) != 1 || r.reader.reads != 0 {
+		t.Fatalf("seeds %+v (%v), reads %d; want one seed and no read", members, err, r.reader.reads)
+	}
+}
+
+// A destination that does not finish within ReplyWait leaves the pass
+// "Not passed yet", naming the seed the owner can check.
+func TestPassReplyWaitTimeout(t *testing.T) {
+	r := newPassRig(t, GuardVersion)
+	r.svc.ReplyWait = time.Second
+	res := r.ask(t, "grokbot", "from: claude-ai abc-3\nto: chatgpt-web")
+	if res.Status != envelope.StatusFailed || !strings.HasPrefix(res.Reply.Body, "Not passed yet: chatgpt-web did not open the chat within 1s") || !strings.Contains(res.Reply.Body, "tincan get ") {
+		t.Fatalf("%s %q", res.Status, res.Reply.Body)
+	}
+	if r.mesh.Server.QueuedCount("chatgpt-web") != 1 {
+		t.Fatal("the seed was not sent")
+	}
+}
+
+// An answer that names no conversation fails: the asker gets no id.
+func TestPassAnsweredWithoutConversationFails(t *testing.T) {
+	r := newPassRig(t, GuardVersion)
+	fakeWeb(t, r.web, nil, func(envelope.Request) (string, envelope.Status) {
+		return "Done, I read it all.", envelope.StatusAnswered
+	})
+	res := r.ask(t, "grokbot", "from: claude-ai abc-3\nto: chatgpt-web")
+	if res.Status != envelope.StatusFailed || !strings.Contains(res.Reply.Body, "answered without naming its conversation") {
+		t.Fatalf("%s %q", res.Status, res.Reply.Body)
+	}
+}
+
+// A history window file that is not valid fails the pass closed: nothing
+// is read or sent.
+func TestPassBadWindowFileFailsClosed(t *testing.T) {
+	r := newPassRig(t, GuardVersion)
+	r.svc.WindowFile = filepath.Join(t.TempDir(), "history-window.json")
+	if err := os.WriteFile(r.svc.WindowFile, []byte(`{"days": "thirty"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := r.ask(t, "grokbot", "from: claude-ai abc-3\nto: chatgpt-web")
+	if res.Status != envelope.StatusFailed || !strings.Contains(res.Reply.Body, "Nothing was passed") || !strings.Contains(res.Reply.Body, "history-window.json") {
+		t.Fatalf("%s %q", res.Status, res.Reply.Body)
+	}
+	if r.reader.reads != 0 || r.mesh.Server.QueuedCount("chatgpt-web") != 0 {
+		t.Fatalf("reads %d, queued %d", r.reader.reads, r.mesh.Server.QueuedCount("chatgpt-web"))
 	}
 }

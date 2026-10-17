@@ -443,14 +443,24 @@ each send with such a group as `pass_sent`: the request id, sender, `to` and
 `bytes`, plus the chat's `source` and `conversation_id` when it continues an ask
 to a `pass`-kind agent whose body parses; never the text.
 
+A seed sent by the pass service continues the ask to it, so it sits in the
+asker's chain. Only the seed's sender, its destination and admins read its
+body, clarifications, attachments and reply. Every other agent sees
+`a passed chat, shown only to its sender and destination` in place of the body
+and the reply body in a trace or get, and no attachments or clarifications;
+search leaves the seed out for them. The chain itself is unchanged.
+
 An ask to the pass service names one chat and one destination, each on its own
 line, in either order: `from: <chat URL>` or `from: <source> <conversation id>`,
 and `to: <web agent>`. It never takes `latest`. The service replies with the
 new conversation only: `New <site> conversation: <id>`.
 
 A web agent records the conversation a seed opened in
-`~/.config/tincan/<agent>-passed.json` (0600, ids and times) before it replies,
-and declines every asker's `conversation:` ask naming one; a list it cannot read
-refuses every `conversation:` ask. The seed's conversation never becomes the
+`~/.config/tincan/web-agent-<site>-passed.json` (0600, ids and times) before it
+replies, and declines every asker's `conversation:` ask naming one. The list is
+shared by every web agent for the site, so each refuses a chat any of them
+recorded. A list an older build kept as `<agent>-passed.json` is merged into it
+on first load and removed. A list it cannot read, either one, refuses every
+`conversation:` ask. The seed's conversation never becomes the
 asker's remembered thread. The pass service checks the destination's roster
 `version` and refuses one older than the first release with this refusal.

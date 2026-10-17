@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mvanhorn/agent-tincan/internal/client"
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
 	"github.com/mvanhorn/agent-tincan/internal/pass"
 	"github.com/mvanhorn/agent-tincan/internal/relay"
@@ -114,5 +115,75 @@ func TestPassSentAudited(t *testing.T) {
 	}
 	if len(got) != 1 {
 		t.Fatalf("pass_sent events = %v, want one", got)
+	}
+}
+
+// A pass seed and its reply hold the passed chat's text. The agent that
+// asked the pass service shares the seed's chain but sees neither in a
+// trace, search or get; the pass service, the destination and the admin
+// still do.
+func TestPassSeedHiddenFromAsker(t *testing.T) {
+	m := testrelay.New(t, passConfig())
+	if ok, err := m.Store.SetAgentKind(t.Context(), "muse", "pass"); !ok || err != nil {
+		t.Fatalf("set kind: %v %v", ok, err)
+	}
+	ask, err := m.Client(t, "grokbot").Send(t.Context(), "muse", "from: grok abc\nto: instinct", envelope.KindAsk, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := m.Client(t, "admin")
+	if err := admin.Raw(t.Context(), "POST", "/v1/admin/requests/"+ask.ID+"/approve", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	muse, inst := m.Client(t, "muse"), m.Client(t, "instinct")
+	if _, err := muse.Claim(t.Context(), ask.ID); err != nil {
+		t.Fatal(err)
+	}
+	seed, err := muse.SendGrouped(t.Context(), "instinct", "new chat\nsecretseed chat text", envelope.KindAsk, ask.ID, "pass-"+ask.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inst.Claim(t.Context(), seed.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inst.Reply(t.Context(), seed.ID, "secretreply from the new chat", envelope.StatusAnswered); err != nil {
+		t.Fatal(err)
+	}
+	trace := func(c *client.Relay) string {
+		var out json.RawMessage
+		if err := c.Raw(t.Context(), "GET", "/v1/trace/"+ask.TraceID, nil, &out); err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	if got := trace(m.Client(t, "grokbot")); strings.Contains(got, "secretseed") || strings.Contains(got, "secretreply") || !strings.Contains(got, envelope.PassRedacted) || !strings.Contains(got, seed.ID) {
+		t.Fatalf("asker trace leaks or drops the seed: %s", got)
+	}
+	for name, c := range map[string]*client.Relay{"muse": muse, "instinct": inst, "admin": admin} {
+		if got := trace(c); !strings.Contains(got, "secretseed") || !strings.Contains(got, "secretreply") {
+			t.Fatalf("%s trace lost the seed: %s", name, got)
+		}
+	}
+	for _, q := range []string{"secretseed", "secretreply"} {
+		if hits, err := m.Client(t, "grokbot").Search(t.Context(), q, 20); err != nil || len(hits) != 0 {
+			t.Fatalf("asker search %q = %+v %v, want none", q, hits, err)
+		}
+		for name, c := range map[string]*client.Relay{"muse": muse, "instinct": inst, "admin": admin} {
+			if hits, err := c.Search(t.Context(), q, 20); err != nil || len(hits) != 1 || hits[0].RequestID != seed.ID {
+				t.Fatalf("%s search %q = %+v %v, want the seed", name, q, hits, err)
+			}
+		}
+	}
+	if res, err := m.Client(t, "grokbot").Get(t.Context(), seed.ID, 0); err == nil {
+		raw, _ := json.Marshal(res)
+		if strings.Contains(string(raw), "secretseed") || strings.Contains(string(raw), "secretreply") {
+			t.Fatalf("asker get leaks the seed: %s", raw)
+		}
+	}
+	for name, c := range map[string]*client.Relay{"muse": muse, "instinct": inst} {
+		res, err := c.Get(t.Context(), seed.ID, 0)
+		if err != nil || !strings.Contains(res.Request.Body, "secretseed") || res.Reply == nil || !strings.Contains(res.Reply.Body, "secretreply") {
+			t.Fatalf("%s get = %+v %v", name, res, err)
+		}
 	}
 }

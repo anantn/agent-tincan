@@ -1153,7 +1153,9 @@ func (s *Store) Get(ctx context.Context, id, agent string) (Result, error) {
 		}
 	}
 	req.RedactFor(agent)
-	return Result{Request: req, Status: status, Reply: rep, Progress: req.Progress, Exchanges: req.Exchanges, RelayNote: note}, nil
+	res := Result{Request: req, Status: status, Reply: rep, Progress: req.Progress, Exchanges: req.Exchanges, RelayNote: note}
+	res.RedactPassFor(agent)
+	return res, nil
 }
 
 // replyFor returns the stored reply for a request, or nil if none yet.

@@ -36,9 +36,9 @@ For each ask the service, in order:
 3. Refuses a destination that is not a web chat teammate, is signed out or out of messages, or last called the relay with a tincan build older than 0.18.0 (a development build counts as older), before reading anything.
 4. Reads the chat and refuses it when it was last updated outside the history window's days (`~/.config/tincan/history-window.json`, 30 days by default; a bad file fails every ask). The window's conversation count does not apply, since the chat is named.
 5. Asks the destination to open a new chat with the seed, as a child of the ask, so the chain and loop rules carry over, grouped `pass-<request id>`. A redelivered ask whose seed already went out waits for that seed instead of sending the chat again.
-6. Replies with the new conversation only: `Passed the claude.ai conversation <id> to chatgpt-web. New ChatGPT conversation: <id>`. The destination's answer is never passed on. If the destination fails, the pass fails with its reason.
+6. Replies with the new conversation only: `Passed the claude.ai conversation <id> to chatgpt-web. New ChatGPT conversation: <id>`. The destination's answer is never passed on. If the destination fails, the pass fails with its status and reason, and says the chat was sent but the destination did not confirm the new chat, since the seed may have reached the site. A failure before the seed goes out says `Nothing was passed`.
 
-The destination web agent lists every conversation a pass opened in `~/.config/tincan/<agent>-passed.json` (0600, ids and times only) before the id goes out, and declines every agent's `conversation:` ask for one of them, the passing agent included, also after a restart. The passed chat never becomes the asker's remembered thread either. You continue it in the browser.
+The destination web agent lists every conversation a pass opened in `~/.config/tincan/web-agent-<site>-passed.json` (0600, ids and times only; one list per site, shared by every web agent for it) before the id goes out, and declines every agent's `conversation:` ask for one of them, the passing agent included, also after a restart. The passed chat never becomes the asker's remembered thread either. You continue it in the browser.
 
 ### Install
 

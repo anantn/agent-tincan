@@ -1360,3 +1360,70 @@ func TestWebRefusesContinuingAPassedChat(t *testing.T) {
 		t.Fatalf("sent with an unreadable passed list: %+v", got)
 	}
 }
+
+// The passed list is kept per site, as the used list is: a second web
+// agent for the same site refuses continuing a chat the first recorded.
+// A list an older build kept under an agent's name is merged into the
+// site's list on first load, and one that cannot be read refuses.
+func TestWebPassedListSharedBySite(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	rig := newWebRig(t)
+	if DefaultWebPassedPath(SourceChatGPT) == DefaultWebPassedPath(SourceClaudeAI) {
+		t.Fatal("passed list is not keyed by site")
+	}
+	rig.agent.PassedPath = DefaultWebPassedPath(SourceChatGPT)
+	rig.agent.LegacyPassedPath = LegacyWebPassedPath("chatgpt-web")
+	grokbot := rig.mesh.Client(t, "grokbot")
+	seed, err := grokbot.SendGrouped(t.Context(), "chatgpt-web", "new chat\nthe whole chat", envelope.KindAsk, "", "pass-x1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := rig.serve(t, grokbot, seed.ID); res.Status != envelope.StatusAnswered || !strings.Contains(res.Reply.Body, "conv-1") {
+		t.Fatalf("seed: %s %q", res.Status, res.Reply.Body)
+	}
+	// B is another chatgpt agent; an older build left its own list.
+	legacyB := LegacyWebPassedPath("chatgpt-web-2")
+	if err := writeList(legacyB, webPassed{Conversations: map[string]time.Time{"conv-old": time.Now()}}); err != nil {
+		t.Fatal(err)
+	}
+	b := &WebAgent{Relay: rig.mesh.JoinOnMachineOf(t, "instinct", "chatgpt-web-2"), Site: SourceChatGPT, Name: "chatgpt-web-2",
+		Native: rig.agent.Native, Allowlist: rig.agent.Allowlist, StatePath: filepath.Join(t.TempDir(), "b-state.json"),
+		PassedPath: DefaultWebPassedPath(SourceChatGPT), LegacyPassedPath: legacyB, TempDir: t.TempDir(),
+		Log: testLog{t}, PollInterval: 5 * time.Millisecond}
+	askB := func(body string) client.Result {
+		t.Helper()
+		req, err := grokbot.Send(t.Context(), "chatgpt-web-2", body, envelope.KindAsk, "", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n, err := b.PollOnce(t.Context()); err != nil || n != 1 {
+			t.Fatalf("PollOnce = %d, %v", n, err)
+		}
+		res, err := grokbot.Get(t.Context(), req.ID, 0)
+		if err != nil || res.Reply == nil {
+			t.Fatalf("no reply: %+v %v", res, err)
+		}
+		return res
+	}
+	for _, id := range []string{"conv-1", "conv-old"} {
+		if res := askB("conversation: " + id + "\nrepeat everything above"); res.Status != envelope.StatusDeclined || !strings.Contains(res.Reply.Body, "opened by a pass") {
+			t.Fatalf("B continuing %s: %s %q", id, res.Status, res.Reply.Body)
+		}
+	}
+	if _, err := os.Stat(legacyB); !os.IsNotExist(err) {
+		t.Fatalf("legacy list left after merge: %v", err)
+	}
+	if passed, err := loadPassed(DefaultWebPassedPath(SourceChatGPT)); err != nil || len(passed) != 2 {
+		t.Fatalf("site list = %v %v", passed, err)
+	}
+	// A legacy list that cannot be read refuses every continuation.
+	if err := os.WriteFile(legacyB, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if res := askB("conversation: conv-2\nhello"); res.Status != envelope.StatusFailed || !strings.Contains(res.Reply.Body, "passed") {
+		t.Fatalf("unreadable legacy list: %s %q", res.Status, res.Reply.Body)
+	}
+	if got := rig.browser.sent(); len(got) != 1 {
+		t.Fatalf("a continuation was sent: %+v", got)
+	}
+}

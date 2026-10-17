@@ -2027,6 +2027,7 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 		}
 		for i := range steps {
 			steps[i].Request.RedactFor(name)
+			steps[i].RedactPassFor(name)
 		}
 		if !slices.Contains(store.Participants(steps), name) {
 			writeErr(w, http.StatusNotFound, errors.New("no such trace"))

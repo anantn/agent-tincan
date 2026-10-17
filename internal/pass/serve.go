@@ -206,8 +206,10 @@ func (s *Service) Handle(ctx context.Context, req envelope.Request) {
 		if res.Reply != nil {
 			why, _ = textfit.Truncate(res.Reply.Body, maxForwardBytes)
 		}
-		s.logf("request %s: %s did not open the chat: %s", req.ID, r.To, res.Status)
-		s.reply(ctx, req, fmt.Sprintf("Nothing was passed: %s did not open the chat (%s). %s", r.To, res.Status, why), envelope.StatusFailed)
+		// The seed went out, so the chat may have reached the site even
+		// though the destination did not confirm it.
+		s.logf("request %s: %s did not confirm the new chat: %s", req.ID, r.To, res.Status)
+		s.reply(ctx, req, fmt.Sprintf("The chat was sent to %s, but it did not confirm the new chat (%s). %s", r.To, res.Status, why), envelope.StatusFailed)
 		return
 	}
 	body := ""

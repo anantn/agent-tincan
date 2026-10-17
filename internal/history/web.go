@@ -102,6 +102,10 @@ type WebAgent struct {
 	// may continue one with conversation:, and a pass seed is refused
 	// when it is empty, since its chat could not be listed.
 	PassedPath string
+	// LegacyPassedPath is the passed list an older build kept under this
+	// agent's name; it is merged into PassedPath on first load. Empty
+	// skips the merge.
+	LegacyPassedPath string
 	// Thread is the one conversation of a site that has one (a dot's DM
 	// thread, from --thread). Every request goes there.
 	Thread string

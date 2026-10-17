@@ -183,8 +183,10 @@ func webServeCmd() *cobra.Command {
 				Thread:      thread,
 				JournalPath: history.DefaultWebJournalPath(name),
 				UsedPath:    history.DefaultWebUsedPath(src),
-				PassedPath:  history.DefaultWebPassedPath(name),
-				Log:         cmd.ErrOrStderr(),
+				PassedPath:  history.DefaultWebPassedPath(src),
+				// An older build kept the list under the agent's name.
+				LegacyPassedPath: history.LegacyWebPassedPath(name),
+				Log:              cmd.ErrOrStderr(),
 			}
 			cmd.PrintErrf("tincan web %s: serving %s on %s (%s)\n", name, src, cfg.Relay, history.DescribeAllowlist(allowPath, allowed))
 			if history.WebSiteTakesThread(src) {

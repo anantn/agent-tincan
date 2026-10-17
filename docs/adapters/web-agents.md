@@ -74,7 +74,7 @@ Every conversation the agent sends into is also added to `~/.config/tincan/web-a
 
 Every reply ends with the conversation id, for example `ChatGPT conversation: 6a1f0c2e-...` or `Grok conversation: 0e1d0000-...`, so the asker can come back to it.
 
-A web agent is also the destination of a pass (`tincan pass <chat> --to <agent>`, see [pass.md](pass.md)): the seed is an ordinary `new chat` ask, grouped `pass-<id>` so it never fails over, and the conversation it opens is named in the footer like any other. Before it replies, the agent lists that conversation in `~/.config/tincan/<agent>-passed.json` (mode 0600; ids and times only) and does not remember it as the asker's thread. From then on it declines every asker's `conversation:` ask for a passed chat, the one that passed it included; the owner continues it in the browser. If the list cannot be read, every `conversation:` ask fails until it is fixed.
+A web agent is also the destination of a pass (`tincan pass <chat> --to <agent>`, see [pass.md](pass.md)): the seed is an ordinary `new chat` ask, grouped `pass-<id>` so it never fails over, and the conversation it opens is named in the footer like any other. Before it replies, the agent lists that conversation in `~/.config/tincan/web-agent-<site>-passed.json` (mode 0600; ids and times only; shared by every web agent for the site, with a list an older build kept as `<agent>-passed.json` merged in on first load) and does not remember it as the asker's thread. From then on it declines every asker's `conversation:` ask for a passed chat, the one that passed it included; the owner continues it in the browser. If the list cannot be read, every `conversation:` ask fails until it is fixed.
 
 ## Replies
 
