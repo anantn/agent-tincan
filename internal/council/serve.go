@@ -17,6 +17,7 @@ import (
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
 	"github.com/mvanhorn/agent-tincan/internal/history"
 	"github.com/mvanhorn/agent-tincan/internal/onboard"
+	"github.com/mvanhorn/agent-tincan/internal/textfit"
 )
 
 // DefaultAgentName is Council's Tincan name.
@@ -400,7 +401,7 @@ func (s *Service) progress(ctx context.Context, id, note string) {
 func (s *Service) postProgress(ctx context.Context, id, note string) {
 	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), replyTimeout)
 	defer cancel()
-	if n, cut := truncate(note, envelope.MaxProgressNote); cut {
+	if n, cut := textfit.Truncate(note, envelope.MaxProgressNote); cut {
 		note = n
 	}
 	if err := s.relay.Progress(pctx, id, note); err != nil {

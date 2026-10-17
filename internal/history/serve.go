@@ -480,7 +480,7 @@ func (s *Service) Handle(ctx context.Context, req envelope.Request) {
 	page, err := r.Read(ctx, q, Options{Window: window})
 	if err != nil {
 		s.logf("request %s: read %s: %v", req.ID, q.Source, err)
-		s.reply(ctx, req, readFailure(q, err), envelope.StatusFailed, nil)
+		s.reply(ctx, req, ReadFailure(q, err), envelope.StatusFailed, nil)
 		return
 	}
 	convs := page.Conversations
@@ -585,8 +585,9 @@ func ChainDenied(allowlist func() ([]string, error), req envelope.Request, agent
 	return ""
 }
 
-// readFailure phrases a reader error for the reply.
-func readFailure(q Query, err error) string {
+// ReadFailure phrases a reader error answering q for a reply, from a
+// fixed template (never the page's notice).
+func ReadFailure(q Query, err error) string {
 	var ue *UnavailableError
 	switch {
 	case errors.As(err, &ue) && ue.Kind == ErrRateLimited:
@@ -594,16 +595,17 @@ func readFailure(q Query, err error) string {
 	case errors.As(err, &ue):
 		return "Sorry, " + ue.Error() + "."
 	case errors.Is(err, ErrNoHistory):
-		return fmt.Sprintf("No %s history was found on this machine.", sourceLabel(q.Source))
+		return fmt.Sprintf("No %s history was found on this machine.", SourceLabel(q.Source))
 	case errors.Is(err, ErrNotFound):
-		return fmt.Sprintf("No %s conversation with id %s was found.", sourceLabel(q.Source), q.ConversationID)
+		return fmt.Sprintf("No %s conversation with id %s was found.", SourceLabel(q.Source), q.ConversationID)
 	case errors.Is(err, context.DeadlineExceeded):
-		return fmt.Sprintf("Reading %s history took too long.", sourceLabel(q.Source))
+		return fmt.Sprintf("Reading %s history took too long.", SourceLabel(q.Source))
 	}
-	return fmt.Sprintf("Reading %s history failed.", sourceLabel(q.Source))
+	return fmt.Sprintf("Reading %s history failed.", SourceLabel(q.Source))
 }
 
-func sourceLabel(s Source) string {
+// SourceLabel names a source in prose ("ChatGPT", "claude.ai", "Codex").
+func SourceLabel(s Source) string {
 	if site := siteFor(s); site != nil {
 		return site.label
 	}
@@ -659,7 +661,7 @@ func renderReply(q Query, page Page) string {
 
 // limitLine is the fixed line for a page the window cut short, or "".
 func limitLine(q Query, page Page) string {
-	w, label := page.Window.orDefault(), sourceLabel(q.Source)
+	w, label := page.Window.orDefault(), SourceLabel(q.Source)
 	switch page.Limited {
 	case LimitCount:
 		return fmt.Sprintf("Only the last %d %s conversations were searched, so older ones may be missing.", w.Max, label)
@@ -670,7 +672,7 @@ func limitLine(q Query, page Page) string {
 }
 
 func renderConversations(q Query, page Page) string {
-	label, convs := sourceLabel(q.Source), page.Conversations
+	label, convs := SourceLabel(q.Source), page.Conversations
 	w := page.Window.orDefault()
 	if len(convs) == 0 {
 		if q.WithImages {

@@ -26,7 +26,7 @@ func TestNoLocalHistoryIsAFriendlyError(t *testing.T) {
 		if err != nil && strings.Contains(err.Error(), "no such file") {
 			t.Errorf("%s: raw ENOENT leaked: %v", tc.r.Source(), err)
 		}
-		if got := readFailure(Query{Source: tc.r.Source()}, err); !strings.Contains(got, "No ") || !strings.Contains(got, "history was found") {
+		if got := ReadFailure(Query{Source: tc.r.Source()}, err); !strings.Contains(got, "No ") || !strings.Contains(got, "history was found") {
 			t.Errorf("%s: reply = %q", tc.r.Source(), got)
 		}
 	}

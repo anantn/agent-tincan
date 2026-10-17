@@ -98,6 +98,14 @@ type WebAgent struct {
 	Allowlist func() ([]string, error)
 	// StatePath holds each asker's last conversation id (0600).
 	StatePath string
+	// PassedPath lists the conversations a pass opened (0600): no asker
+	// may continue one with conversation:, and a pass seed is refused
+	// when it is empty, since its chat could not be listed.
+	PassedPath string
+	// LegacyPassedPath is the passed list an older build kept under this
+	// agent's name; it is merged into PassedPath on first load. Empty
+	// skips the merge.
+	LegacyPassedPath string
 	// Thread is the one conversation of a site that has one (a dot's DM
 	// thread, from --thread). Every request goes there.
 	Thread string
@@ -245,6 +253,10 @@ type webRequest struct {
 
 var convURLPattern = regexp.MustCompile(`^/(?:g/[A-Za-z0-9_-]+/)?(?:c|chat)/([A-Za-z0-9][A-Za-z0-9_-]{0,127})/?$`)
 
+// NewChat is the threading first line that opens a fresh conversation
+// (case-insensitive, with an optional trailing colon).
+const NewChat = "new chat"
+
 const threadingHelp = `Put "new chat" or "conversation: <id>" on the first line to choose the conversation, and the message after it.`
 
 // parseWebRequest reads the optional threading line: "new chat" or
@@ -255,7 +267,7 @@ func parseWebRequest(body string) (webRequest, error) {
 	head := strings.ToLower(strings.TrimSpace(first))
 	r := webRequest{mode: threadContinue, message: strings.TrimSpace(body)}
 	switch {
-	case head == "new chat" || head == "new chat:":
+	case head == NewChat || head == NewChat+":":
 		r = webRequest{mode: threadNew, message: strings.TrimSpace(rest)}
 	case strings.HasPrefix(head, "conversation:"):
 		ref := strings.TrimSpace(strings.TrimSpace(first)[len("conversation:"):])
@@ -276,7 +288,7 @@ func parseWebRequest(body string) (webRequest, error) {
 // other first line, a "conversation:" one included, is kept.
 func dropNewChatLine(body string) string {
 	first, rest, _ := strings.Cut(body, "\n")
-	if head := strings.ToLower(strings.TrimSpace(first)); head == "new chat" || head == "new chat:" {
+	if head := strings.ToLower(strings.TrimSpace(first)); head == NewChat || head == NewChat+":" {
 		return strings.TrimSpace(rest)
 	}
 	return strings.TrimSpace(body)
@@ -408,6 +420,16 @@ func (w *WebAgent) Handle(ctx context.Context, req envelope.Request) {
 			return
 		}
 		wr.convID = id
+		if reason, status := w.refuseContinuation(id, label); reason != "" {
+			w.logf("request %s from %s: refused continuing conversation %s: %s", req.ID, req.From, id, status)
+			w.reply(ctx, req, reason, status, nil)
+			return
+		}
+	}
+	seed := !site.oneThread && isPassSeed(req, wr)
+	if seed && w.PassedPath == "" {
+		w.reply(ctx, req, fmt.Sprintf("Nothing was sent to %s: the %s agent keeps no list of passed chats, so it cannot take a pass.", label, w.Name), envelope.StatusFailed, nil)
+		return
 	}
 	if len(wr.message) > MaxSendMessage {
 		w.reply(ctx, req, fmt.Sprintf("Nothing was sent to %s: the message is %d bytes, over the %d byte limit.", label, len(wr.message), MaxSendMessage), envelope.StatusFailed, nil)
@@ -443,6 +465,9 @@ func (w *WebAgent) Handle(ctx context.Context, req envelope.Request) {
 				}
 			}
 			w.reply(ctx, req, "Image submission is uncertain. Files may already have reached the vendor. This request will not be sent again automatically; inspect the conversation before a new ask.", envelope.StatusFailed, nil)
+			return
+		}
+		if seed && !w.markPassed(ctx, req, e.ConversationID, label) {
 			return
 		}
 		w.resume(ctx, req, wr, e)
@@ -605,6 +630,15 @@ func (w *WebAgent) Handle(ctx context.Context, req envelope.Request) {
 			w.logf("used list %s: %v", w.UsedPath, err)
 		}
 	}
+	if seed {
+		// A passed chat is the owner's to continue: it is listed before
+		// its id goes out, and never becomes the asker's own thread.
+		if !w.markPassed(ctx, req, res.ConversationID, label) {
+			return
+		}
+		w.answer(ctx, req, anchor, entry, note)
+		return
+	}
 	st.Conversations[req.From] = webMemory{ID: res.ConversationID, Updated: time.Now().UTC()}
 	w.saveState(st)
 	w.answer(ctx, req, anchor, entry, note)
@@ -666,7 +700,7 @@ func (w *WebAgent) answer(ctx context.Context, req envelope.Request, anchor repl
 	if note != "" {
 		tail += "\n\n" + note
 	}
-	tail += fmt.Sprintf("\n\n%s: %s", convName(w.Site), convID)
+	tail += fmt.Sprintf("\n\n%s: %s", ConversationName(w.Site), convID)
 	body, truncated := capReplyTo(text, maxWebReplyBytes-len(tail))
 	if truncated {
 		// Room for the notice comes out of the text too; its numbers are

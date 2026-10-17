@@ -336,6 +336,18 @@ func TestCouncilHeldByDefaultWithoutApproval(t *testing.T) {
 	}
 }
 
+// AE5: an agent's ask to the pass teammate waits for the owner even with
+// no approval.json, because approving it sends one of the owner's chats to
+// another vendor.
+func TestPassHeldByDefaultWithoutApproval(t *testing.T) {
+	f := newFixture(t, Config{})
+	f.agent(t, "pass", "pass")
+	req := f.prepareTo(t, "pass")
+	if req.Status != envelope.StatusHeld || req.HoldTTL != 2*time.Hour {
+		t.Fatalf("pass ask = status %q ttl %v; want held for 2h", req.Status, req.HoldTTL)
+	}
+}
+
 // An approval.json that gates other agents but names no council still holds
 // council asks, with the file's hold TTL and notify target.
 func TestCouncilHeldWhenApprovalHasNoEntry(t *testing.T) {

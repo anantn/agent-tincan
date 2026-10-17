@@ -130,6 +130,34 @@ func (r *Request) RedactFor(agent string) {
 	}
 }
 
+// PassGroupPrefix starts the group id of every seed a pass sends
+// ("pass-<id>"). A grouped ask never fails over, so a seed only reaches
+// the destination the owner named; the destination web agent knows a
+// seed by it, and the relay audits one as pass_sent.
+const PassGroupPrefix = "pass-"
+
+// PassRedacted stands in for a pass seed's text and its reply wherever
+// someone other than the seed's sender and destination reads them.
+const PassRedacted = "a passed chat, shown only to its sender and destination"
+
+// RedactPassFor hides a pass seed's text, clarifications, attachments and
+// reply from agent unless it sent the seed or is its destination. The seed
+// continues the chain of the ask to the pass service, so that asker reads
+// the chain, but the owner approved moving the chat, not showing it to the
+// asker.
+func (r *Result) RedactPassFor(agent string) {
+	q := &r.Request
+	if !strings.HasPrefix(q.Group, PassGroupPrefix) || q.From == agent || q.To == agent {
+		return
+	}
+	q.Body, q.Attachments, q.Exchanges, r.Exchanges = PassRedacted, nil, nil, nil
+	if r.Reply != nil {
+		rep := *r.Reply
+		rep.Body, rep.Attachments = PassRedacted, nil
+		r.Reply = &rep
+	}
+}
+
 // GroupMember identifies a request without fetching its result or marking replies seen.
 type GroupMember struct {
 	ID string `json:"id"`

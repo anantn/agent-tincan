@@ -388,7 +388,7 @@ func (c *ClaudeCode) Read(ctx context.Context, q Query, opts Options) (Page, err
 				return Page{}, err
 			}
 			if ok {
-				return Page{Conversations: []Conversation{conversationMessages(th, q.wantsImages())}, Window: effectiveWindow(c.Window, opts)}, nil
+				return Page{Conversations: []Conversation{conversationMessages(th, q.wantsImages(), opts.Whole)}, Window: effectiveWindow(c.Window, opts)}, nil
 			}
 		}
 		return Page{}, fmt.Errorf("claude-code: %w: %s", ErrNotFound, q.ConversationID)

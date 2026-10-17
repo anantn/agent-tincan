@@ -62,6 +62,32 @@ func TestApprovalCommands(t *testing.T) {
 	}
 }
 
+// tincan held shows a held pass as the chat that would move and where, or
+// says the pass will fail when its request does not parse.
+func TestHeldShowsPass(t *testing.T) {
+	m := testrelay.New(t, relay.Config{ParsePass: parsePassRef})
+	if ok, err := m.Store.SetAgentKind(t.Context(), "muse", "pass"); !ok || err != nil {
+		t.Fatalf("set kind: %v %v", ok, err)
+	}
+	sender := m.Client(t, "grokbot")
+	good, err := sender.Send(t.Context(), "muse", "from: https://chatgpt.com/c/68f0c1d2-aaaa\nto: claude-web", envelope.KindAsk, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.Send(t.Context(), "muse", "from: chatgpt latest\nto: claude-web", envelope.KindAsk, "", false); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, heldCmd(), "--relay", m.URL("admin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{good.ID, "grokbot -> muse (pass)", "pass: ChatGPT conversation 68f0c1d2-aaaa -> claude-web", `pass: will fail: a pass names one conversation, never "latest"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("held output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 // tincan held shows the target's kind and each attachment's name and size,
 // so the owner sees what a council ask would send on to vendors.
 func TestHeldListsKindAndAttachments(t *testing.T) {

@@ -19,6 +19,7 @@ Contents:
 - [New in v0.11.0](#new-in-v0110)
 - [New in v0.10.0](#new-in-v0100)
 - [Council](#council)
+- [Pass the conversation](#pass-the-conversation)
 - [New in v0.9.0](#new-in-v090)
 - [New in v0.8.0](#new-in-v080)
 - [New in v0.7.0](#new-in-v070)
@@ -189,6 +190,29 @@ Each stage waits up to a few minutes and then goes on with whoever answered, as 
 - By default every web teammate (your dot included) and every model teammate the relay can wake sits on the council. Claude Code stays off, so a council never interrupts the session you are coding in, and the convener and its chain never sit or chair. Change the roster, chairman order and time limits in `council.json`.
 
 Set it up after upgrading the relay (see [New in v0.10.0](#new-in-v0100)): `tincan invite council --kind council`, join it with `TINCAN_CONFIG=~/.config/tincan/council.json`, then `tincan council install` and `tincan council doctor`. Full guide: [docs/adapters/council.md](docs/adapters/council.md). Council sends your question, attached text and every member's answers to every vendor on the council, and one member's memory-informed answer reaches the others during review; read [the trust model](docs/trust-model.md#council) first.
+
+## Pass the conversation
+
+Move a chat from one web chat app to another and pick up where you left off. `tincan pass` reads one of your ChatGPT, claude.ai, Grok, Gemini or Copilot chats through the Tincan Chrome extension and has a web teammate open a new chat on its own site with it:
+
+```bash
+tincan pass https://claude.ai/chat/<id> --to chatgpt-web   # a chat URL
+tincan pass grok --to gemini-web                           # Grok's newest chat
+tincan pass chatgpt --id <id> --to claude-web              # one chat by id
+```
+
+The new chat starts with one message: the chat's title, the first line of each earlier prompt, and the last 6 turns verbatim, framed as material from another conversation rather than instructions. tincan builds it in Go with no model step, and it fits the destination's message cap: the newest turns are kept whole first and older text is cut before anything recent is dropped. The command prints the conversation the destination opened (`ChatGPT conversation: <id>`); continue it in the browser.
+
+The destination must be one of the six web chat teammates (`chatgpt-web`, `claude-web`, `grok-web`, `gemini-web`, `perplexity-web`, `copilot-web`), signed in and not out of messages; anything else is refused before the chat is read. Perplexity and dot threads cannot be passed from, because they are not history sources. A pass never fails over to another vendor. It sends that chat to the destination's vendor, so read [the trust model](docs/trust-model.md#passing-a-conversation) first.
+
+Agents can ask for a pass too, through the `pass` teammate (`tincan pass serve`, next to history on the Mac with Chrome). They name the chat by URL or by source and id, never "latest":
+
+```bash
+tincan ask pass "from: https://claude.ai/chat/<id>
+to: chatgpt-web"
+```
+
+The relay holds every ask to `pass` for your approval, with no `approval.json` needed, and `tincan held` shows which chat would move where. Every agent in the request's chain must be on `~/.config/tincan/pass-allow.txt` (no file: every joined agent) and on the history allowlist, and the chat must be inside the history window. The asking agent gets back only the new conversation's id, never the chat's text, and the web teammate refuses any agent's `conversation:` ask for a passed chat, so you continue it in the browser. Set it up with `tincan invite pass --kind pass`, join it with `TINCAN_CONFIG=~/.config/tincan/pass.json`, then `tincan pass install`. Full guide: [docs/adapters/pass.md](docs/adapters/pass.md).
 
 ## New in v0.9.0
 
@@ -411,7 +435,7 @@ Single-target text output and exit codes are unchanged.
 
 Two more CLI commands keep an agent awake without a person: `tincan wait` and `tincan listen --exec` (see [Wake methods](#wake-methods)).
 
-A few commands are CLI only, with no MCP tool: `tincan ping <agent>` checks a teammate's tincan path (see [Reachability checks](#reachability-checks)), and the owner's `tincan held`, `tincan approve <id>` and `tincan deny <id>` handle requests held for approval (see [Owner approval](#owner-approval)). Agents convene a council with `ask`; the owner's `tincan council "question"` and `tincan council leaderboard` are CLI only (see [Council](#council)).
+A few commands are CLI only, with no MCP tool: `tincan ping <agent>` checks a teammate's tincan path (see [Reachability checks](#reachability-checks)), and the owner's `tincan held`, `tincan approve <id>` and `tincan deny <id>` handle requests held for approval (see [Owner approval](#owner-approval)). Agents convene a council with `ask`; the owner's `tincan council "question"` and `tincan council leaderboard` are CLI only (see [Council](#council)), and so is `tincan pass` (see [Pass the conversation](#pass-the-conversation)).
 
 ### Asking several teammates
 
@@ -469,6 +493,8 @@ To require approval before selected agents receive incoming requests, create `ap
 ```
 
 `from: "*"` holds every request to that target. A `from` list holds requests when any sender in the relay-recorded chain matches. Use `"unless": ["trusted"]` in place of `from` to hold requests unless every agent in the chain is listed. `hold_ttl` defaults to `2h`; `notify` is optional. The file reloads on changes. A missing file disables the gate for every agent except [Council](#council). An unreadable, malformed, or overly accessible file holds all requests to the targets in the last valid copy; without a valid copy the relay refuses to start. A bad file first appearing at runtime rejects new sends until fixed.
+
+The `pass` agent is held by default the same way: every ask to an agent of kind `pass` is held, because approving it sends one of your chats to another vendor ([Pass the conversation](#pass-the-conversation)).
 
 Council is held by default. Every request to an agent of kind `council` is held, with or without `approval.json`, because a council sends the question, its attachments and every member's answer to every model vendor on the team. Agents' leaderboard reads are held too, since the relay holds by target. Without `approval.json` nobody is notified: the convening agent tells you the request id, or add a `notify` agent with `{"gate": {}, "notify": "grokbot"}`. A gate entry for `council` replaces the default, so `{"gate": {"council": {"from": []}}}` holds nothing. When you run `tincan council "question"` yourself in a terminal on an admin device, it approves its own request and starts at once.
 
@@ -580,7 +606,7 @@ tincan services refresh            # install ~/Applications/Agent Tincan.app and
 tincan services refresh --revert   # run the services without it again
 ```
 
-`tincan history install`, `tincan web install`, `tincan council install` and `tincan relay-watch install` do this for new services. `tincan services refresh` edits existing plists in `~/Library/LaunchAgents` in place, including ones you wrote by hand: the app's launcher goes first in `ProgramArguments`, ahead of the tincan binary, and every other key is kept. It touches only plists whose program is the tincan binary you run it with, and restarts the loaded ones. The launcher runs only a tincan binary signed by Agent Tincan, so a development build behind it will not start; `tincan doctor` says so, and `--revert` fixes it. The notes service stays as it is, so the Files and Folders access you grant it is not shared with other services. If Login Items still shows the old name after a refresh, macOS kept a stale record; the last resort is `sfltool resetbtm` and a restart, which resets the Login Items approvals of every app, not just tincan.
+`tincan history install`, `tincan web install`, `tincan council install`, `tincan pass install` and `tincan relay-watch install` do this for new services. `tincan services refresh` edits existing plists in `~/Library/LaunchAgents` in place, including ones you wrote by hand: the app's launcher goes first in `ProgramArguments`, ahead of the tincan binary, and every other key is kept. It touches only plists whose program is the tincan binary you run it with, and restarts the loaded ones. The launcher runs only a tincan binary signed by Agent Tincan, so a development build behind it will not start; `tincan doctor` says so, and `--revert` fixes it. The notes service stays as it is, so the Files and Folders access you grant it is not shared with other services. If Login Items still shows the old name after a refresh, macOS kept a stale record; the last resort is `sfltool resetbtm` and a restart, which resets the Login Items approvals of every app, not just tincan.
 
 The relay upgrades itself the same way, from an admin device, with no shell on the relay host:
 
@@ -1340,7 +1366,7 @@ tincan onboard --operator grokbot
 - `--owner` names the person the prompts refer to; `--kind name=kind` tailors one agent's block.
 - It is read-only: it never mints invite codes or joins or removes agents. Its output never contains wake secrets. Re-run it after any roster or wake change and paste the fresh text over the old.
 
-Kinds: `vm-webhook`, `e2b-email`, `proxy-sandbox`, `claude-code`, `chatgpt`, `hermes`, `openclaw`, `codex`, `gemini-cli`, `grok-cli`, `history`, `council`, `chatgpt-web`, `claude-web`, `grok-web`, `gemini-web`, `perplexity-web`, `copilot-web`, `scheduled`, `generic`. History, Council and the web agents are services, so their blocks carry setup only, no standing instructions of their own. The Council block also carries the lines to add to the standing instructions of each teammate that should convene one, and the operator prompt passes "put this to the council" to it. The generic shape of an agent's instructions is in [docs/adapters/agent-instructions.md](docs/adapters/agent-instructions.md).
+Kinds: `vm-webhook`, `e2b-email`, `proxy-sandbox`, `claude-code`, `chatgpt`, `hermes`, `openclaw`, `codex`, `gemini-cli`, `grok-cli`, `history`, `council`, `pass`, `chatgpt-web`, `claude-web`, `grok-web`, `gemini-web`, `perplexity-web`, `copilot-web`, `scheduled`, `generic`. History, Council and the web agents are services, so their blocks carry setup only, no standing instructions of their own. The Council block also carries the lines to add to the standing instructions of each teammate that should convene one, and the operator prompt passes "put this to the council" to it. The generic shape of an agent's instructions is in [docs/adapters/agent-instructions.md](docs/adapters/agent-instructions.md).
 
 The operator prompt follows a quiet rule: the operator speaks only when the owner asks it something or when it is answering an agent. Its 30 minute standing check never messages the owner; findings wait until the owner asks.
 

@@ -2,24 +2,15 @@ package council
 
 import (
 	"fmt"
-	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/mvanhorn/agent-tincan/internal/history"
+	"github.com/mvanhorn/agent-tincan/internal/textfit"
 )
 
 // promptCap is the largest prompt Council sends: the web agents' send cap,
 // so every member can take every prompt.
 const promptCap = history.MaxSendMessage
-
-// newChat is every prompt's first line, so a web member opens a fresh
-// conversation instead of continuing an earlier council or stage.
-const newChat = "new chat"
-
-// truncReserve is the room kept for a truncation notice on each piece of
-// text that may be cut.
-const truncReserve = 64
 
 // errPromptTooLong is why a council is declined when even its fixed
 // parts do not fit promptCap.
@@ -29,38 +20,6 @@ var errPromptTooLong = fmt.Errorf("the question is too long: a council prompt mu
 type contextFile struct {
 	Name string
 	Text string
-}
-
-// truncate cuts s to at most n bytes on a rune boundary and appends a
-// notice (at most truncReserve bytes) when it cut anything.
-func truncate(s string, n int) (string, bool) {
-	if len(s) <= n {
-		return s, false
-	}
-	n = max(n, 0)
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n--
-	}
-	return s[:n] + fmt.Sprintf("\n[truncated: showing %d of %d bytes]", n, len(s)), true
-}
-
-// fit shares budget bytes across pieces of the given lengths: each gets
-// its whole length when that fits in an even share, and the room it
-// leaves goes to the longer ones.
-func fit(lens []int, budget int) []int {
-	out := make([]int, len(lens))
-	order := make([]int, len(lens))
-	for i := range order {
-		order[i] = i
-	}
-	slices.SortFunc(order, func(a, b int) int { return lens[a] - lens[b] })
-	left := max(budget, 0)
-	for k, i := range order {
-		share := left / (len(order) - k)
-		out[i] = min(lens[i], share)
-		left -= out[i]
-	}
-	return out
 }
 
 func sum(xs []int) int {
@@ -80,7 +39,7 @@ const answerInstructions = `You are one of several AI models answering the same 
 func answerPrompt(question string, inline []contextFile, attached, left []string, nonce string) (string, []string, error) {
 	build := func(texts []string) string {
 		var b strings.Builder
-		b.WriteString(newChat + "\n" + answerInstructions + "\n\nQuestion:\n" + question)
+		b.WriteString(history.NewChat + "\n" + answerInstructions + "\n\nQuestion:\n" + question)
 		writeContext(&b, inline, texts, nonce)
 		if len(attached) > 0 {
 			b.WriteString("\n\nContext files attached to this message: " + strings.Join(attached, ", "))
@@ -90,11 +49,11 @@ func answerPrompt(question string, inline []contextFile, attached, left []string
 		}
 		return b.String()
 	}
-	fixed := len(build(make([]string, len(inline)))) + truncReserve*len(inline)
+	fixed := len(build(make([]string, len(inline)))) + textfit.Reserve*len(inline)
 	if fixed > promptCap {
 		return "", nil, errPromptTooLong
 	}
-	texts, cut := truncateAll(inline, fit(lengths(inline), promptCap-fixed))
+	texts, cut := truncateAll(inline, textfit.Fit(lengths(inline), promptCap-fixed))
 	return build(texts), cut, nil
 }
 
@@ -131,7 +90,7 @@ func truncateAll[T textPiece](pieces []T, allot []int) ([]string, []string) {
 	for i, p := range pieces {
 		name, text := p.parts()
 		var c bool
-		if texts[i], c = truncate(text, allot[i]); c {
+		if texts[i], c = textfit.Truncate(text, allot[i]); c {
 			cut = append(cut, name)
 		}
 	}
@@ -159,7 +118,7 @@ FINAL RANKING:
 func reviewPrompt(question string, inline []contextFile, answers []labeledAnswer, nonce string) (string, []string, error) {
 	build := func(ctxTexts, ansTexts []string) string {
 		var b strings.Builder
-		b.WriteString(newChat + "\n" + fmt.Sprintf(reviewInstructions, nonce) + "\n\nQuestion:\n" + question)
+		b.WriteString(history.NewChat + "\n" + fmt.Sprintf(reviewInstructions, nonce) + "\n\nQuestion:\n" + question)
 		writeContext(&b, inline, ctxTexts, nonce)
 		for i, a := range answers {
 			fmt.Fprintf(&b, "\n\nAnswer %s:\n<<<ANSWER %s %s>>>\n%s\n<<<END ANSWER %s>>>", a.Label, a.Label, nonce, ansTexts[i], nonce)
@@ -167,15 +126,15 @@ func reviewPrompt(question string, inline []contextFile, answers []labeledAnswer
 		b.WriteString("\n\n" + reviewAsk)
 		return b.String()
 	}
-	fixed := len(build(make([]string, len(inline)), make([]string, len(answers)))) + truncReserve*(len(inline)+len(answers))
+	fixed := len(build(make([]string, len(inline)), make([]string, len(answers)))) + textfit.Reserve*(len(inline)+len(answers))
 	avail := promptCap - fixed
 	if avail < 0 {
 		return "", nil, errPromptTooLong
 	}
 	ansLens := lengths(answers)
-	ctxAllot := fit(lengths(inline), avail-sum(ansLens))
+	ctxAllot := textfit.Fit(lengths(inline), avail-sum(ansLens))
 	ctxTexts, _ := truncateAll(inline, ctxAllot)
-	ansAllot := fit(ansLens, avail-sum(ctxAllot))
+	ansAllot := textfit.Fit(ansLens, avail-sum(ctxAllot))
 	ansTexts, cut := truncateAll(answers, ansAllot)
 	return build(ctxTexts, ansTexts), cut, nil
 }
@@ -207,7 +166,7 @@ MINORITY: a minority answer worth a second look and why, or "none"`
 func chairmanPrompt(question string, tally []tallyLine, answers []labeledAnswer, categories []string, nonce string) (string, error) {
 	build := func(texts []string) string {
 		var b strings.Builder
-		b.WriteString(newChat + "\n" + fmt.Sprintf(chairmanInstructions, nonce) + "\n\nQuestion:\n" + question + "\n\nPeer tally, best first:")
+		b.WriteString(history.NewChat + "\n" + fmt.Sprintf(chairmanInstructions, nonce) + "\n\nQuestion:\n" + question + "\n\nPeer tally, best first:")
 		for _, t := range tally {
 			if t.Placement == 0 {
 				fmt.Fprintf(&b, "\nAnswer %s: not ranked by any valid ballot", t.Label)
@@ -221,10 +180,10 @@ func chairmanPrompt(question string, tally []tallyLine, answers []labeledAnswer,
 		b.WriteString("\n\n" + fmt.Sprintf(chairmanAsk, strings.Join(categories, ", ")))
 		return b.String()
 	}
-	fixed := len(build(make([]string, len(answers)))) + truncReserve*len(answers)
+	fixed := len(build(make([]string, len(answers)))) + textfit.Reserve*len(answers)
 	if fixed > promptCap {
 		return "", errPromptTooLong
 	}
-	texts, _ := truncateAll(answers, fit(lengths(answers), promptCap-fixed))
+	texts, _ := truncateAll(answers, textfit.Fit(lengths(answers), promptCap-fixed))
 	return build(texts), nil
 }

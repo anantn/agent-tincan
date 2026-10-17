@@ -341,3 +341,18 @@ func TestOptionsWindowOverridesReaderWindow(t *testing.T) {
 		t.Fatalf("owner max only: %+v", got)
 	}
 }
+
+// A conversation read is capped to its newest messages unless the caller
+// asks for the whole chat.
+func TestConversationMessagesWhole(t *testing.T) {
+	th := thread{conv: Conversation{ID: "c"}}
+	for i := range MaxConversationMessages {
+		th.turns = append(th.turns, turn{prompt: Message{Role: RoleUser, Text: fmt.Sprintf("p%d", i)}, reply: Message{Text: "r"}})
+	}
+	if c := conversationMessages(th, false, false); len(c.Messages) != MaxConversationMessages || c.Messages[0].Text != fmt.Sprintf("p%d", MaxConversationMessages/2) {
+		t.Fatalf("capped read = %d messages from %q", len(c.Messages), c.Messages[0].Text)
+	}
+	if c := conversationMessages(th, false, true); len(c.Messages) != 2*MaxConversationMessages || c.Messages[0].Text != "p0" {
+		t.Fatalf("whole read = %d messages from %q", len(c.Messages), c.Messages[0].Text)
+	}
+}

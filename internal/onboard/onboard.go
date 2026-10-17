@@ -38,6 +38,7 @@ const (
 	KindHistory       = "history"
 	KindNotes         = "notes"
 	KindCouncil       = "council"
+	KindPass          = "pass"
 	KindChatGPTWeb    = "chatgpt-web"
 	KindClaudeWeb     = "claude-web"
 	KindGrokWeb       = "grok-web"
@@ -50,7 +51,7 @@ const (
 )
 
 // Kinds lists every agent kind in recipe order.
-var Kinds = []string{KindVMWebhook, KindE2BEmail, KindProxySandbox, KindClaudeCode, KindChatGPT, KindSesame, KindHermes, KindOpenClaw, KindCodex, KindGeminiCLI, KindGrokCLI, KindHistory, KindNotes, KindCouncil, KindChatGPTWeb, KindClaudeWeb, KindGrokWeb, KindGeminiWeb, KindPerplexityWeb, KindCopilotWeb, KindDotWeb, KindScheduled, KindGeneric}
+var Kinds = []string{KindVMWebhook, KindE2BEmail, KindProxySandbox, KindClaudeCode, KindChatGPT, KindSesame, KindHermes, KindOpenClaw, KindCodex, KindGeminiCLI, KindGrokCLI, KindHistory, KindNotes, KindCouncil, KindPass, KindChatGPTWeb, KindClaudeWeb, KindGrokWeb, KindGeminiWeb, KindPerplexityWeb, KindCopilotWeb, KindDotWeb, KindScheduled, KindGeneric}
 
 // KnownKind reports whether kind is empty (no kind) or one of Kinds.
 func KnownKind(kind string) bool { return kind == "" || slices.Contains(Kinds, kind) }
@@ -65,7 +66,7 @@ const (
 var Sections = []string{"operator", "agents", "recipes", "all"}
 
 // runtimeNames maps runtime names to kinds when nothing else says. Only
-// product runtimes and product agents (history, notes, council) belong here, never anyone's
+// product runtimes and product agents (history, notes, council, pass) belong here, never anyone's
 // personal agent names. A hosted product with no kind of its own maps to the
 // hosting-shape kind it fits: Hark has no push path and runs on its own
 // schedule, so it is scheduled.
@@ -81,6 +82,7 @@ var runtimeNames = map[string]string{
 	"history":        KindHistory,
 	"notes":          KindNotes,
 	"council":        KindCouncil,
+	"pass":           KindPass,
 	"chatgpt-web":    KindChatGPTWeb,
 	"claude-web":     KindClaudeWeb,
 	"grok-web":       KindGrokWeb,
@@ -107,6 +109,7 @@ var defaultWake = map[string]string{
 	KindHistory:       "wait",
 	KindNotes:         "wait",
 	KindCouncil:       "wait",
+	KindPass:          "wait",
 	KindChatGPTWeb:    "wait",
 	KindClaudeWeb:     "wait",
 	KindGrokWeb:       "wait",
@@ -125,6 +128,7 @@ var stockGoodAt = map[string]string{
 	KindHistory:       "finds the owner's past ChatGPT, claude.ai, Grok, Gemini, Copilot, Codex, Claude Code and Grok CLI chats and images",
 	KindNotes:         "saves, searches and reads the owner's Agent Notes on their Mac; never edits or deletes one",
 	KindCouncil:       "asks web, CLI and webhook agents (not Claude Code) one question, ranks answers blind; slow, held for approval by default",
+	KindPass:          "moves one of the owner's chats (by URL or id) into a new chat on a web chat teammate; held for approval by default",
 	KindChatGPTWeb:    "asks ChatGPT (chatgpt.com) in the owner's browser and replies with the answer and any images ChatGPT made",
 	KindClaudeWeb:     "asks Claude (claude.ai) in the owner's browser and replies with the answer as text; Claude makes no images",
 	KindGrokWeb:       "asks Grok (grok.com) in the owner's browser and replies with the answer and any images Grok made; no videos",
@@ -359,9 +363,9 @@ func expectOnline(kind, wake string) bool {
 }
 
 // isService reports whether kind is a Tincan Go service rather than a
-// model: history, notes, council, and the web agents.
+// model: history, notes, council, pass, and the web agents.
 func isService(kind string) bool {
-	return kind == KindHistory || kind == KindNotes || kind == KindCouncil || isWebKind(kind)
+	return kind == KindHistory || kind == KindNotes || kind == KindCouncil || kind == KindPass || isWebKind(kind)
 }
 
 // WebChatKinds are the six web chat teammates the relay moves an unsent

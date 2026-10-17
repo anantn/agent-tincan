@@ -8,7 +8,9 @@ package history
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -29,6 +31,10 @@ type webSite struct {
 	limiter string
 	// host is the site's host, in error text and conversation URLs.
 	host string
+	// altHosts are other hosts whose chat URLs ResolveChatURL reads as
+	// the site's (copilot.microsoft.com, which sends a personal account
+	// to copilot.com).
+	altHosts []string
 	// agent is the default name of the site's web agent.
 	agent string
 	// opPrefix starts each of the site's extension operations
@@ -103,22 +109,23 @@ type webSite struct {
 	oneThread bool
 }
 
-// convName names src's conversation in a reply footer ("ChatGPT
-// conversation", "your dot's DM").
-func convName(src Source) string {
+// ConversationName is how a web agent's reply footer names a site's
+// conversation ("ChatGPT conversation", "your dot's DM"): the footer is
+// "<ConversationName>: <id>".
+func ConversationName(src Source) string {
 	if s := siteFor(src); s != nil && s.dm != "" {
 		return s.dm
 	}
 	return siteLabel(src) + " conversation"
 }
 
-// theConv is convName in running text ("the ChatGPT conversation",
+// theConv is ConversationName in running text ("the ChatGPT conversation",
 // "your dot's DM").
 func theConv(src Source) string {
 	if s := siteFor(src); s != nil && s.dm != "" {
 		return s.dm
 	}
-	return "the " + convName(src)
+	return "the " + ConversationName(src)
 }
 
 // siteLimiter names who rate-limits the account on src ("ChatGPT" for a
@@ -244,6 +251,7 @@ var webSites = []*webSite{
 		source:   SourceCopilot,
 		label:    "Copilot",
 		host:     "copilot.com",
+		altHosts: []string{"copilot.microsoft.com"},
 		agent:    "copilot-web",
 		opPrefix: "copilot",
 		reader: func(c *Client, now func() time.Time) liveReader {
@@ -466,3 +474,38 @@ func historySiteSources() []Source {
 
 // perplexityConvPath is www.perplexity.ai's thread path, /search/<slug>.
 var perplexityConvPath = regexp.MustCompile(`^/search/([A-Za-z0-9][A-Za-z0-9_-]{0,127})/?$`)
+
+// ResolveChatURL reads a chat URL into the history source and the
+// conversation id (in the site's canonical form) it names. A URL on a site
+// that is not a history source (Perplexity, a dot) is refused by name.
+func ResolveChatURL(ref string) (Source, string, error) {
+	u, err := url.Parse(strings.TrimSpace(ref))
+	if err != nil || u.Scheme != "https" {
+		return "", "", fmt.Errorf("%q is not a chat URL (want an https link to a conversation on %s)", ref, LiveSourcesLabel())
+	}
+	var onHost *webSite
+	for _, s := range webSites {
+		if u.Host != s.host && !slices.Contains(s.altHosts, u.Host) {
+			continue
+		}
+		if onHost == nil {
+			onHost = s
+		}
+		m := s.convPath.FindStringSubmatch(u.Path)
+		if m == nil {
+			continue
+		}
+		if s.webOnly {
+			return "", "", fmt.Errorf("%s is not a history source, so its conversations cannot be read", s.label)
+		}
+		id, ok := s.canonical(m[1])
+		if !ok {
+			return "", "", fmt.Errorf("%q does not name a %s conversation", ref, s.label)
+		}
+		return s.source, id, nil
+	}
+	if onHost != nil {
+		return "", "", fmt.Errorf("%q is not a %s conversation URL", ref, onHost.label)
+	}
+	return "", "", fmt.Errorf("%q is not a chat URL on %s", ref, LiveSourcesLabel())
+}

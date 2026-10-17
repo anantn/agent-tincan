@@ -15,6 +15,7 @@ import (
 
 	"github.com/mvanhorn/agent-tincan/internal/client"
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
+	"github.com/mvanhorn/agent-tincan/internal/textfit"
 )
 
 // Relay is the part of the relay client the engine uses; *client.Relay
@@ -620,7 +621,7 @@ const detailBytes = 300
 // detail is a member's reply body as an Absence's Detail: trimmed and cut
 // to detailBytes.
 func detail(body string) string {
-	d, _ := truncate(strings.TrimSpace(body), detailBytes)
+	d, _ := textfit.Truncate(strings.TrimSpace(body), detailBytes)
 	return d
 }
 

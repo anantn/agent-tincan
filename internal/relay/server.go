@@ -67,6 +67,19 @@ type Config struct {
 	// never moves an ask to; "" reads it beside the store's database, and
 	// an in-memory store has none.
 	FailoverPath string
+	// ParsePass reads an ask to a pass-kind agent into the chat and
+	// destination it names, as the pass service will, for the held
+	// listing and the pass_sent audit event. The relay cannot import the
+	// pass package (the history package's tests run a relay), so tincan
+	// relay supplies it; nil leaves the parsed fields out.
+	ParsePass func(body string) (PassRef, error)
+}
+
+// PassRef is the chat a pass request names and where it would go.
+type PassRef struct {
+	Source         string `json:"source"`
+	ConversationID string `json:"conversation_id"`
+	To             string `json:"to"`
 }
 
 func (c *Config) defaults() {
@@ -733,6 +746,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, attachmentStatus(err, http.StatusInternalServerError), err)
 		return
 	}
+	s.recordPassSent(r.Context(), req)
 	if req.Status == envelope.StatusHeld {
 		s.record(r.Context(), "held", req.ID, req.TraceID, from, store.DetailJSON(map[string]any{"to": req.To, "hop": req.Hop, "chain": req.Chain}))
 		s.notifyApproval(r.Context(), req)
@@ -2013,6 +2027,7 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 		}
 		for i := range steps {
 			steps[i].Request.RedactFor(name)
+			steps[i].RedactPassFor(name)
 		}
 		if !slices.Contains(store.Participants(steps), name) {
 			writeErr(w, http.StatusNotFound, errors.New("no such trace"))
@@ -2117,14 +2132,20 @@ func (s *Server) handleHeld(w http.ResponseWriter, r *http.Request) {
 	}
 	// Each entry also names the target's kind, so the owner sees a council ask
 	// (which goes on to every model vendor) for what it is. The attachments'
-	// names and sizes already ride on the request. Old clients ignore to_kind.
+	// names and sizes already ride on the request. An ask to a pass agent
+	// also carries the chat and destination parsed from its whole body, as
+	// the pass service will read them, or why it will not. Old clients
+	// ignore to_kind, pass and pass_error.
 	type heldRequest struct {
 		envelope.Request
-		ToKind string `json:"to_kind,omitempty"`
+		ToKind    string   `json:"to_kind,omitempty"`
+		Pass      *PassRef `json:"pass,omitempty"`
+		PassError string   `json:"pass_error,omitempty"`
 	}
 	out := make([]heldRequest, len(reqs))
 	kinds := map[string]string{} // target -> kind, for the lookups that succeeded
 	for i, req := range reqs {
+		full := req.Body
 		req.Body = approvalPreview(req.Body)
 		out[i] = heldRequest{Request: req}
 		kind, seen := kinds[req.To]
@@ -2139,8 +2160,35 @@ func (s *Server) handleHeld(w http.ResponseWriter, r *http.Request) {
 			kinds[req.To] = kind
 		}
 		out[i].ToKind = kind
+		if kind == onboard.KindPass && s.cfg.ParsePass != nil {
+			if p, err := s.cfg.ParsePass(full); err != nil {
+				out[i].PassError = err.Error()
+			} else {
+				out[i].Pass = &p
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// recordPassSent audits a pass seed (a request grouped pass-<id>) as
+// pass_sent with its target and size, never its text. When it continues
+// an ask to a pass agent, the chat's source and id come from that ask.
+func (s *Server) recordPassSent(ctx context.Context, req envelope.Request) {
+	if !strings.HasPrefix(req.Group, envelope.PassGroupPrefix) {
+		return
+	}
+	detail := map[string]any{"to": req.To, "bytes": len(req.Body)}
+	if req.ParentID != "" && s.cfg.ParsePass != nil {
+		if parent, _, err := s.store.Request(ctx, req.ParentID); err == nil {
+			if a, ok, err := s.lookupAgent(ctx, parent.To); err == nil && ok && a.Kind == onboard.KindPass {
+				if p, err := s.cfg.ParsePass(parent.Body); err == nil {
+					detail["source"], detail["conversation_id"] = p.Source, p.ConversationID
+				}
+			}
+		}
+	}
+	s.record(ctx, "pass_sent", req.ID, req.TraceID, req.From, store.DetailJSON(detail))
 }
 
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
