@@ -184,8 +184,10 @@ func pushOwn(ctx context.Context, t socketTarget, mine []client.Result, own map[
 	}
 	release, ok, err := shared.tryLock()
 	if err != nil {
-		log.Printf("tincan socket wake: lock: %v", err)
-		return false, nil
+		// Without the lock nothing can be delivered, so this counts as a
+		// failed write: repeated lock errors end socket wake instead of
+		// advertising a wake that never comes.
+		return true, fmt.Errorf("lock: %w", err)
 	}
 	if !ok {
 		return false, nil
@@ -230,8 +232,10 @@ func pushOwn(ctx context.Context, t socketTarget, mine []client.Result, own map[
 func pushShared(ctx context.Context, t socketTarget, w client.Waiting, shared socketShared, peekedAt time.Time) (bool, error) {
 	release, ok, err := shared.tryLock()
 	if err != nil {
-		log.Printf("tincan socket wake: lock: %v", err)
-		return false, nil
+		// Without the lock nothing can be delivered, so this counts as a
+		// failed write: repeated lock errors end socket wake instead of
+		// advertising a wake that never comes.
+		return true, fmt.Errorf("lock: %w", err)
 	}
 	if !ok {
 		return false, nil

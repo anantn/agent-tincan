@@ -626,3 +626,26 @@ func TestSocketWakeOwnReplyOnceAcrossWindowsOnOlderRelay(t *testing.T) {
 		t.Fatalf("pushes for one reply across windows = %d (asker %d, other %d), want 1", n, a.count(), b.count())
 	}
 }
+
+// A lock that cannot be taken at all (a config directory that cannot be
+// written) means nothing can be delivered, so it counts as a failed write
+// and ends socket wake instead of advertising a wake that never comes.
+func TestSocketWakeLockErrorCountsAsFailure(t *testing.T) {
+	fastChannel(t, 10*time.Millisecond, time.Hour)
+	m := testrelay.New(t, relay.Config{PollHold: time.Second})
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shared := socketShared{dir: filepath.Join(blocker, "socket-wake"), agent: "muse"}
+	m.Client(t, "grokbot").Send(t.Context(), "muse", "call the dentist", envelope.KindAsk, "", false)
+	w := newFakeWindow()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := pushSocket(ctx, museWindow(t, m, "mcp-a"), w, shared, map[string]bool{}); !errors.Is(err, errSocketFailing) {
+		t.Fatalf("pushSocket = %v, want it to give up when the lock cannot be taken", err)
+	}
+	if n := w.count(); n != 0 {
+		t.Fatalf("pushes = %d, want none without the lock", n)
+	}
+}
