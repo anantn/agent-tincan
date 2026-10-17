@@ -177,7 +177,9 @@ receive 403:
   also carry `to_kind`, the target's kind; for a target of kind `pass`, `pass`
   (`{"source", "conversation_id", "to"}`, parsed from the whole body as the
   pass service will read it) or `pass_error` (why it will fail). Older
-  clients ignore them.
+  clients ignore them. A browser caller (one that sends `Origin` or any
+  `Sec-Fetch-*` header, as the phone page does) also gets `approve_nonce`,
+  `deny_nonce` and `nonce_expires_at` on each entry.
 - `POST /v1/admin/requests/{id}/approve`: returns the queued request. A fresh
   normal TTL starts; the original `created_at` is kept. Normal wake follows.
 - `POST /v1/admin/requests/{id}/deny`: optional `{"reason":"..."}` body;
@@ -185,6 +187,23 @@ receive 403:
   the reason. Missing reason means an empty reply body.
 
 Approval and denial require an unexpired held request; other states return 409.
+
+A browser caller must also send `{"nonce":"..."}` (with `reason` on a deny),
+the matching nonce from its own held listing. A nonce is bound to the request,
+the decision and the caller's tailnet node, lasts 10 minutes, works once, and
+dies when the hold ends. A browser decision answers
+`{"id":"...","status":"queued"|"declined"}`; when the hold had already ended
+(the nonce was used, or another device or the CLI decided first) it answers 200
+`{"id":"...","status":"<final status>","already_decided":true}`, and with a
+missing, expired or mismatched nonce on a request that is still held it answers
+409. Clients that send no browser headers need no nonce and see no change. The
+`approved` and `denied` audit details name the deciding device
+(`{"device":"<machine name>"}`) for calls from the tailnet.
+
+`GET /phone/` and the files under it are the [phone page](phone.md), served
+to admin devices only (403 otherwise), on the relay's tailnet listeners and,
+when the tailnet issues the relay a certificate, on port 443 under its
+certificate name.
 The sweep expires overdue holds and logs `hold_expired`. Holds survive restarts
 with their original deadline. Policy changes apply only to future sends.
 A `ping` is never held: it has no body and runs no model work. Search results
