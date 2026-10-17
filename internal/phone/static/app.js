@@ -32,6 +32,7 @@ const state = {
   roomRebuild: true, // the post list must be drawn again, not just added to
   roomGen: 0, // bumped by resetRoom, so a read for an earlier room is dropped
   roomRecheckAt: 0, // where the next recheckMentions starts among open mentions
+  roomDrafts: new Map(), // room name -> unsent text, for rooms not open now
 };
 
 // sending is true while an ask is on its way, so a render from a poll in
@@ -711,8 +712,7 @@ async function refreshRoomsOnce() {
     // first; a room picked or made while the listing was on its way may not
     // be in it yet, and the call that picked it reads again.
     if (gen === state.roomGen && (!state.room || (all.status === 200 && !openRoom()))) {
-      state.room = state.rooms.length ? state.rooms[0].name : "";
-      resetRoom();
+      switchRoom(state.rooms.length ? state.rooms[0].name : "");
     }
     const room = openRoom();
     if (room && state.me && (room.members || []).includes(state.me)) {
@@ -722,6 +722,19 @@ async function refreshRoomsOnce() {
   } catch (_) {
     // The main poll reports the relay as offline.
   }
+}
+
+// switchRoom opens room name. The box's unsent text stays with the room
+// being left and the next room shows its own draft, or nothing, so a
+// draft is never posted to a room it was not written for.
+function switchRoom(name) {
+  const box = $("room-body");
+  if (state.room && box.value) state.roomDrafts.set(state.room, box.value);
+  else if (state.room) state.roomDrafts.delete(state.room);
+  state.room = name;
+  box.value = state.roomDrafts.get(name) || "";
+  state.roomDrafts.delete(name);
+  resetRoom();
 }
 
 function resetRoom() {
@@ -809,8 +822,7 @@ async function createRoom() {
     // The phone takes part in the room it made, as its own agent.
     if (state.me) await api("POST", memberPath(name), { agent: state.me });
     $("room-new").value = "";
-    state.room = name;
-    resetRoom();
+    switchRoom(name);
     announce("Created room " + name + ".");
   } catch (e) {
     roomError("Could not create the room: " + e.message);
@@ -868,7 +880,10 @@ async function postToRoom() {
   try {
     const res = await api("POST", roomPath(room) + "/posts", { body });
     if (res.status !== 201 || !res.data) throw new Error((res.data && res.data.error) || "error " + res.status);
-    if (stillOpen() && $("room-body").value === draft) $("room-body").value = "";
+    // The sent draft is cleared wherever it now waits: in the box while
+    // its room is open, or kept for that room after a switch.
+    if (room === state.room && $("room-body").value === draft) $("room-body").value = "";
+    else if (state.roomDrafts.get(room) === draft) state.roomDrafts.delete(room);
     if (stillOpen()) {
       for (const m of res.data.post.mentions || []) notices.append(el("li", "", "Asked " + m.agent + "; the reply will be posted here."));
       for (const n of res.data.notices || []) notices.append(el("li", "", n));
@@ -1177,8 +1192,7 @@ $("tab-team").addEventListener("click", () => { state.tab = "team"; render(); })
 $("tab-ask").addEventListener("click", () => { state.tab = "ask"; refreshSent(); render(); });
 $("tab-rooms").addEventListener("click", () => { state.tab = "rooms"; render(); refreshRooms(); });
 $("room-pick").addEventListener("change", () => {
-  state.room = $("room-pick").value;
-  resetRoom();
+  switchRoom($("room-pick").value);
   $("room-notices").replaceChildren();
   roomError("");
   refreshRooms();

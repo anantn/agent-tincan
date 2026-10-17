@@ -128,28 +128,49 @@ func (s *Server) mayReadRooms(ctx context.Context, agent string) bool {
 // redactRooms hides each mention's room text (RedactRoom) from reader
 // unless reader may read rooms now (mayReadRooms) and is now a member of
 // the mention's room: the same checks room_read makes, applied to every
-// other way a mention is read (trace, get, unseen replies).
+// other way a mention is read (trace, get, unseen replies). An unseen
+// reply's parent preview is a mention too when the ask was made while
+// handling one, and is hidden the same way.
 func (s *Server) redactRooms(ctx context.Context, results []envelope.Result, reader string) error {
 	member := map[int64]bool{}
 	allowed, checked := false, false
-	for i := range results {
-		post := results[i].Request.RoomPostID
-		if post == 0 {
-			continue
-		}
+	may := func(post int64) (bool, error) {
 		if !checked {
 			allowed, checked = s.mayReadRooms(ctx, reader), true
 		}
+		if !allowed {
+			return false, nil
+		}
 		ok, seen := member[post]
-		if allowed && !seen {
+		if !seen {
 			var err error
 			if ok, err = s.store.RoomPostMember(ctx, post, reader); err != nil {
-				return err
+				return false, err
 			}
 			member[post] = ok
 		}
-		if !allowed || !ok {
-			results[i].RedactRoom()
+		return ok, nil
+	}
+	for i := range results {
+		if post := results[i].Request.RoomPostID; post != 0 {
+			ok, err := may(post)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				results[i].RedactRoom()
+			}
+		}
+		if p := results[i].Parent; p != nil && p.RoomPostID != 0 {
+			ok, err := may(p.RoomPostID)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				par := *p
+				par.Body = envelope.RoomRedacted
+				results[i].Parent = &par
+			}
 		}
 	}
 	return nil

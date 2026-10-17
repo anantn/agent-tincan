@@ -404,3 +404,23 @@ func TestRoomsTabEdgeCases(t *testing.T) {
 		t.Error("recheckMentions must rotate through the open mentions")
 	}
 }
+
+// A room's unsent draft stays with that room: every switch goes through
+// switchRoom, which keeps the box's text under the room being left and
+// shows the next room's own draft (or nothing), so a draft never posts to
+// a room it was not written for.
+func TestRoomDraftPerRoom(t *testing.T) {
+	app := read(t, "app.js")
+	sw := funcBody(t, app, "switchRoom")
+	for _, want := range []string{"state.roomDrafts.set(state.room", `$("room-body")`, `state.roomDrafts.get(name) || ""`, "resetRoom()"} {
+		if !strings.Contains(sw, want) {
+			t.Errorf("switchRoom lacks %s", want)
+		}
+	}
+	if n := strings.Count(app, "state.room = "); n != 1 {
+		t.Errorf("state.room is set in %d places; every switch must go through switchRoom", n)
+	}
+	if !strings.Contains(funcBody(t, app, "postToRoom"), "state.roomDrafts.delete(room)") {
+		t.Error("postToRoom must drop a sent draft kept for a room switched away from")
+	}
+}

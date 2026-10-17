@@ -907,3 +907,43 @@ func TestRoomFormerPosterReadsNoRoomText(t *testing.T) {
 		t.Fatalf("gated search = %+v", hits)
 	}
 }
+
+// An ordinary ask made while handling a mention carries the mention as its
+// unseen reply's parent preview. A replier taken out of the room no longer
+// reads the room's text there; a member again reads it.
+func TestRoomFormerMemberParentPreviewRedacted(t *testing.T) {
+	m := mentionMesh(t)
+	post(t, m, "codex", "@claude-code zebra secret roadmap")
+	mention := take(t, m, "claude-code")
+	cc := m.Client(t, "claude-code")
+	if _, err := cc.Send(t.Context(), "muse", "which okapi?", envelope.KindAsk, mention.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	child := take(t, m, "muse")
+	if _, err := m.Client(t, "muse").Reply(t.Context(), child.ID, "the tall one", envelope.StatusAnswered); err != nil {
+		t.Fatal(err)
+	}
+	parent := func(where string) *envelope.Parent {
+		t.Helper()
+		in, err := cc.PollReplies(t.Context(), time.Millisecond, client.RepliesKeep)
+		if err != nil || len(in.Replies) != 1 || in.Replies[0].Parent == nil || in.Replies[0].Reply == nil || in.Replies[0].Reply.Body != "the tall one" {
+			t.Fatalf("%s inbox = %+v %v", where, in, err)
+		}
+		return in.Replies[0].Parent
+	}
+	if p := parent("member"); p.ID != mention.ID || !strings.Contains(p.Body, "zebra") {
+		t.Fatalf("member parent = %+v", p)
+	}
+	if _, err := client.RemoveRoomMember(t.Context(), m.Client(t, "admin"), "launch", "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	if p := parent("former member"); p.ID != mention.ID || p.Body != envelope.RoomRedacted || p.From != "codex" {
+		t.Fatalf("former member parent = %+v", p)
+	}
+	if _, err := client.AddRoomMember(t.Context(), m.Client(t, "admin"), "launch", "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	if p := parent("member again"); !strings.Contains(p.Body, "zebra") {
+		t.Fatalf("member again parent = %+v", p)
+	}
+}

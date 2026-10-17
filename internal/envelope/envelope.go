@@ -361,6 +361,9 @@ type Parent struct {
 	From   string `json:"from"`
 	Body   string `json:"body"`
 	Status Status `json:"status"`
+	// RoomPostID is the parent's own RoomPostID, so the relay can hide a
+	// mention's text from a reader no longer in its room. Relay-only.
+	RoomPostID int64 `json:"-"`
 }
 
 // Done reports whether the request has reached a final state.
