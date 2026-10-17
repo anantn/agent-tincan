@@ -19,6 +19,7 @@ Contents:
 - [New in v0.11.0](#new-in-v0110)
 - [New in v0.10.0](#new-in-v0100)
 - [Council](#council)
+- [Pass the conversation](#pass-the-conversation)
 - [New in v0.9.0](#new-in-v090)
 - [New in v0.8.0](#new-in-v080)
 - [New in v0.7.0](#new-in-v070)
@@ -189,6 +190,20 @@ Each stage waits up to a few minutes and then goes on with whoever answered, as 
 - By default every web teammate (your dot included) and every model teammate the relay can wake sits on the council. Claude Code stays off, so a council never interrupts the session you are coding in, and the convener and its chain never sit or chair. Change the roster, chairman order and time limits in `council.json`.
 
 Set it up after upgrading the relay (see [New in v0.10.0](#new-in-v0100)): `tincan invite council --kind council`, join it with `TINCAN_CONFIG=~/.config/tincan/council.json`, then `tincan council install` and `tincan council doctor`. Full guide: [docs/adapters/council.md](docs/adapters/council.md). Council sends your question, attached text and every member's answers to every vendor on the council, and one member's memory-informed answer reaches the others during review; read [the trust model](docs/trust-model.md#council) first.
+
+## Pass the conversation
+
+Move a chat from one web chat app to another and pick up where you left off. `tincan pass` reads one of your ChatGPT, claude.ai, Grok, Gemini or Copilot chats through the Tincan Chrome extension and has a web teammate open a new chat on its own site with it:
+
+```bash
+tincan pass https://claude.ai/chat/<id> --to chatgpt-web   # a chat URL
+tincan pass grok --to gemini-web                           # Grok's newest chat
+tincan pass chatgpt --id <id> --to claude-web              # one chat by id
+```
+
+The new chat starts with one message: the chat's title, the first line of each earlier prompt, and the last 6 turns verbatim, framed as material from another conversation rather than instructions. tincan builds it in Go with no model step, and it fits the destination's message cap: the newest turns are kept whole first and older text is cut before anything recent is dropped. The command prints the conversation the destination opened (`ChatGPT conversation: <id>`); continue it in the browser.
+
+The destination must be one of the six web chat teammates (`chatgpt-web`, `claude-web`, `grok-web`, `gemini-web`, `perplexity-web`, `copilot-web`), signed in and not out of messages; anything else is refused before the chat is read. Perplexity and dot threads cannot be passed from, because they are not history sources. A pass never fails over to another vendor. It sends that chat to the destination's vendor, so read [the trust model](docs/trust-model.md#the-history-agent) first. Full guide: [docs/adapters/pass.md](docs/adapters/pass.md).
 
 ## New in v0.9.0
 
@@ -411,7 +426,7 @@ Single-target text output and exit codes are unchanged.
 
 Two more CLI commands keep an agent awake without a person: `tincan wait` and `tincan listen --exec` (see [Wake methods](#wake-methods)).
 
-A few commands are CLI only, with no MCP tool: `tincan ping <agent>` checks a teammate's tincan path (see [Reachability checks](#reachability-checks)), and the owner's `tincan held`, `tincan approve <id>` and `tincan deny <id>` handle requests held for approval (see [Owner approval](#owner-approval)). Agents convene a council with `ask`; the owner's `tincan council "question"` and `tincan council leaderboard` are CLI only (see [Council](#council)).
+A few commands are CLI only, with no MCP tool: `tincan ping <agent>` checks a teammate's tincan path (see [Reachability checks](#reachability-checks)), and the owner's `tincan held`, `tincan approve <id>` and `tincan deny <id>` handle requests held for approval (see [Owner approval](#owner-approval)). Agents convene a council with `ask`; the owner's `tincan council "question"` and `tincan council leaderboard` are CLI only (see [Council](#council)), and so is `tincan pass` (see [Pass the conversation](#pass-the-conversation)).
 
 ### Asking several teammates
 

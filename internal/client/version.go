@@ -24,6 +24,16 @@ func Ahead(a, b string) bool {
 	return newer(a, b, true)
 }
 
+// AtLeast reports whether v is a release build no older than release min.
+// A development or invalid build is never at least anything: what it
+// contains cannot be told from its version.
+func AtLeast(v, min string) bool {
+	if releaseVersion.FindStringSubmatch(v) == nil || developmentVersion.MatchString(v) {
+		return false
+	}
+	return !Ahead(min, v)
+}
+
 func newer(a, b string, stableBeatsPrerelease bool) bool {
 	av, bv := releaseVersion.FindStringSubmatch(a), releaseVersion.FindStringSubmatch(b)
 	if av == nil || bv == nil || developmentVersion.MatchString(a) || developmentVersion.MatchString(b) {

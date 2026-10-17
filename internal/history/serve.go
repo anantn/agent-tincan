@@ -603,6 +603,9 @@ func readFailure(q Query, err error) string {
 	return fmt.Sprintf("Reading %s history failed.", sourceLabel(q.Source))
 }
 
+// SourceLabel names a source in prose ("ChatGPT", "claude.ai", "Codex").
+func SourceLabel(s Source) string { return sourceLabel(s) }
+
 func sourceLabel(s Source) string {
 	if site := siteFor(s); site != nil {
 		return site.label

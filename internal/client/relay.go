@@ -408,6 +408,14 @@ func (r *Relay) Send(ctx context.Context, to, body string, kind envelope.Kind, p
 	return out.Request, err
 }
 
+// SendGrouped sends one request under group, a group id the caller chose
+// rather than a fresh one (a pass's "pass-<id>", so a redelivered pass
+// finds the seed it already sent), as a child of parent ("" lets the relay
+// infer it). A relay that predates groups drops the group.
+func (r *Relay) SendGrouped(ctx context.Context, to, body string, kind envelope.Kind, parent, group string) (envelope.SendResponse, error) {
+	return r.send(ctx, map[string]any{"to": to, "body": body, "kind": kind, "parent_id": parent, "group": group})
+}
+
 // sent is the relay's send response.
 type sent = envelope.SendResponse
 

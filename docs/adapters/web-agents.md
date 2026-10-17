@@ -74,6 +74,8 @@ Every conversation the agent sends into is also added to `~/.config/tincan/web-a
 
 Every reply ends with the conversation id, for example `ChatGPT conversation: 6a1f0c2e-...` or `Grok conversation: 0e1d0000-...`, so the asker can come back to it.
 
+A web agent is also the destination of a pass (`tincan pass <chat> --to <agent>`, see [pass.md](pass.md)): the seed is an ordinary `new chat` ask, grouped `pass-<id>` so it never fails over, and the conversation it opens is named in the footer like any other.
+
 ## Replies
 
 - The answer text, capped at 64 KB. A longer answer is cut and the reply says how much is shown.

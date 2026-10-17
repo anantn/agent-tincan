@@ -53,6 +53,20 @@ func TestClientSendsItsVersion(t *testing.T) {
 	}
 }
 
+// AtLeast admits only release builds at or after the minimum; a
+// development build says nothing about what it contains.
+func TestAtLeast(t *testing.T) {
+	for v, want := range map[string]bool{
+		"0.18.0": true, "v0.18.0": true, "0.18.1": true, "1.0.0": true,
+		"0.17.9": false, "0.18.0-rc.1": false, "0.18.0-3-gabc1234": false,
+		"0.0.1-dev": false, "": false, "garbage": false,
+	} {
+		if got := client.AtLeast(v, "0.18.0"); got != want {
+			t.Errorf("AtLeast(%q) = %v, want %v", v, got, want)
+		}
+	}
+}
+
 func TestNewer(t *testing.T) {
 	for _, tt := range []struct {
 		a, b string

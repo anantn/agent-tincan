@@ -111,6 +111,11 @@ type webSite struct {
 
 // convName names src's conversation in a reply footer ("ChatGPT
 // conversation", "your dot's DM").
+// ConversationName is how a web agent's reply footer names a site's
+// conversation ("ChatGPT conversation", "your dot's DM"): the footer is
+// "<ConversationName>: <id>".
+func ConversationName(src Source) string { return convName(src) }
+
 func convName(src Source) string {
 	if s := siteFor(src); s != nil && s.dm != "" {
 		return s.dm
