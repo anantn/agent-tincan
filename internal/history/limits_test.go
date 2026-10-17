@@ -395,3 +395,25 @@ func TestRelayTakesLimitsErrorNotCached(t *testing.T) {
 		t.Fatalf("capability reads = %d, want 2", reads)
 	}
 }
+
+// A send that went through with the site's limit text in view is still
+// answered: the limit holds back the next send, not the reads that wait
+// for this message's reply.
+func TestSentWithLimitTextStillReadsAnswer(t *testing.T) {
+	rig, _ := limitRig(t)
+	site := siteFor(SourceChatGPT)
+	saved := site.limitText
+	site.limitText = claudeLimitRules
+	t.Cleanup(func() { site.limitText = saved })
+	rig.browser.sentNotice = claudeNoResetFixture
+	res := rig.ask(t, "grokbot", "hello")
+	if res.Status != envelope.StatusAnswered || !strings.Contains(res.Reply.Body, "You said: hello") {
+		t.Fatalf("%s %q", res.Status, res.Reply.Body)
+	}
+	if got := rig.agent.auth.latest; got.State != envelope.WebLimited {
+		t.Fatalf("status = %+v", got)
+	}
+	if left := rig.agent.Native.CooldownRemaining(SourceChatGPT); left <= 0 {
+		t.Fatalf("cooldown = %v, want the next send held back", left)
+	}
+}

@@ -574,7 +574,10 @@ func (w *WebAgent) Handle(ctx context.Context, req envelope.Request) {
 	// closed once the reply is read or the wait gives up, on a context of
 	// its own because ctx may be spent by then.
 	defer w.closeTab(ctx, res.ConversationID)
-	w.observeSent(res)
+	// A limit the page showed with this send holds back the next send, but
+	// only once this one's reply is read: the cooldown refuses every site
+	// request, the reads that wait for this reply among them.
+	defer w.observeSent(res)
 	anchor.since = res.Submitted()
 	// A send that confirmed its message in the conversation (dots.send)
 	// names it: the wait binds to that message from the start.

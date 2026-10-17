@@ -45,6 +45,9 @@ type fakeBrowser struct {
 	sendRetryAfter int
 	sendNotice     string
 	sendClicked    bool
+	// sentNotice is the page's alert text a send that went through
+	// reports with its result.
+	sentNotice string
 	// block makes sends wait for the request context to end.
 	block bool
 	// detailErr, when set, fails every detail read after the first
@@ -132,8 +135,9 @@ func (f *fakeBrowser) Exchange(ctx context.Context, req NativeRequest, recv func
 			t.imageID = fmt.Sprintf("file-Gen%d", len(f.convs[id])+f.seq)
 		}
 		f.convs[id] = append(f.convs[id], t)
+		sentNotice := f.sentNotice
 		f.mu.Unlock()
-		res, _ := json.Marshal(SendResult{ConversationID: id, URL: "https://chatgpt.com/c/" + id, SubmittedAt: now.UnixMilli()})
+		res, _ := json.Marshal(SendResult{ConversationID: id, URL: "https://chatgpt.com/c/" + id, SubmittedAt: now.UnixMilli(), Notice: sentNotice})
 		_, err := recv(NativeResponse{ID: req.ID, OK: true, Result: res})
 		return err
 	case OpChatGPTDetail:
