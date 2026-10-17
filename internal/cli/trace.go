@@ -90,7 +90,12 @@ func formatTrace(tr traceResp) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Trace %s\n", tr.TraceID)
 	for _, st := range tr.Steps {
-		fmt.Fprintf(&b, "%s%s -> %s  [%s]  %s\n", strings.Repeat("  ", max(st.Request.Hop-1, 0)), st.Request.From, st.Request.To, st.Status, oneLine(string(st.Request.Kind)+" "+st.Request.Body))
+		to := st.Request.To
+		if len(st.Request.MovedFrom) > 0 {
+			// Failover moved it off a web agent that was out of messages.
+			to += " (moved from " + strings.Join(st.Request.MovedFrom, ", ") + ")"
+		}
+		fmt.Fprintf(&b, "%s%s -> %s  [%s]  %s\n", strings.Repeat("  ", max(st.Request.Hop-1, 0)), st.Request.From, to, st.Status, oneLine(string(st.Request.Kind)+" "+st.Request.Body))
 		if st.Progress != nil {
 			fmt.Fprintf(&b, "  %s\n", client.FormatProgress(st.Progress))
 		}

@@ -173,6 +173,16 @@ func clockTime(t, now time.Time) string {
 	return t.Format("Jan 2 15:04")
 }
 
+// LimitNote is "out of messages until 14:00" (on the local clock) for a
+// web agent whose site's usage limit has not reset by now, and empty
+// otherwise.
+func (a AgentInfo) LimitNote(now time.Time) string {
+	if !a.LimitedUntil.After(now) {
+		return ""
+	}
+	return "out of messages until " + clockTime(a.LimitedUntil, now)
+}
+
 // UnansweredNote is "woken 12m ago, no check-in (webhook ok)" for an agent
 // the relay woke that has not checked in since, with the error in place of
 // ok when the wake failed, and empty otherwise.

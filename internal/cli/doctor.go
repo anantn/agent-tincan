@@ -156,6 +156,7 @@ func runDoctor(ctx context.Context, exe string, extraConfigs []string) doctorRep
 	if joined {
 		add(unansweredCheck(ctx, r, time.Now()))
 		add(webStatusCheck(ctx, r))
+		add(webLimitCheck(ctx, r, time.Now()))
 	}
 
 	// 3. Self-test of tincan mcp in both framings.
@@ -594,6 +595,31 @@ func webStatusCheck(ctx context.Context, r *client.Relay) check {
 		return check{"web authentication", "ok", "no reported signed-out browser sessions; missing reports mean unknown", ""}
 	}
 	return check{"web authentication", "warn", strings.Join(notes, " "), "Sign in on each named browser host. Fresh authenticated traffic or a session probe clears the mark."}
+}
+
+// webLimitCheck lists each web teammate whose site reported it is out of
+// messages, with the reset time. It is the relay's latest observation: a
+// limit drops off once its reset passes. A relay that predates limits
+// reports none.
+func webLimitCheck(ctx context.Context, r *client.Relay, now time.Time) check {
+	const name = "web limits"
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	roster, err := r.Roster(ctx)
+	if err != nil {
+		return check{name, "warn", "could not read the roster: " + err.Error(), ""}
+	}
+	var limited []string
+	for _, a := range roster.Agents {
+		if note := a.LimitNote(now); note != "" {
+			limited = append(limited, a.Name+" is "+note)
+		}
+	}
+	if len(limited) == 0 {
+		return check{name, "ok", "no web teammate reports its site out of messages", ""}
+	}
+	return check{name, "warn", strings.Join(limited, "; "),
+		"Nothing to fix: the relay moves each one's unsent asks to another web chat teammate that is free, or holds them until the reset. List a teammate in failover.json in the relay state dir to keep asks off it."}
 }
 
 // relayMovesCheck reports whether this agent can find its relay by itself
