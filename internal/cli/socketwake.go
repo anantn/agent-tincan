@@ -179,7 +179,12 @@ func pushShared(ctx context.Context, t socketTarget, w client.Waiting, shared so
 	}
 	changed := false
 	for k, at := range rec {
-		if !listed[k] && now.Sub(at) >= socketRecordKeep {
+		// A count key ("q#N", from a relay that gives only a count) names
+		// no request, so a new request can bring back a count already
+		// announced. Drop it once the count changes, and do not keep it
+		// past socketRecordKeep even while it is listed.
+		count := strings.HasPrefix(k, "q#")
+		if (count && !listed[k]) || ((count || !listed[k]) && now.Sub(at) >= socketRecordKeep) {
 			delete(rec, k)
 			changed = true
 		}
@@ -337,6 +342,37 @@ func (p *claudeSocketPusher) idle() bool {
 // agent's config, so each agent on the machine has its own.
 func socketWakeDir() string {
 	return filepath.Join(filepath.Dir(client.ConfigPath()), "socket-wake")
+}
+
+// wakePath is how a tincan mcp server keeps its session reachable.
+type wakePath int
+
+const (
+	wakeByKeepalive wakePath = iota // nothing pushes; whoami keeps the session live
+	wakeByChannel                   // the Claude Code channel transport
+	wakeBySocket                    // the session's own messaging socket
+)
+
+func (w wakePath) String() string {
+	return [...]string{"keepalive", "channel", "socket"}[w]
+}
+
+// pickWake decides the wake path from the flags. --channel wins, and the
+// session socket is read only when socket wake is on, so --wake-socket=false
+// neither reads the registry nor logs about it. fromEnv returns nil when
+// there is no session socket that checks out; the server then runs the
+// keepalive so the window keeps its replies.
+func pickWake(channel, socket bool, fromEnv func() *claudeSocketPusher) (wakePath, *claudeSocketPusher) {
+	if channel {
+		return wakeByChannel, nil
+	}
+	if !socket {
+		return wakeByKeepalive, nil
+	}
+	if p := fromEnv(); p != nil {
+		return wakeBySocket, p
+	}
+	return wakeByKeepalive, nil
 }
 
 // claudeSocketFromEnv returns the socket pusher for the Claude Code session

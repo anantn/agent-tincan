@@ -6,7 +6,9 @@ import (
 	"log"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/mvanhorn/agent-tincan/internal/client"
 	"github.com/mvanhorn/agent-tincan/internal/history"
@@ -63,7 +65,7 @@ func (s *titleSharer) refresh(ctx context.Context) {
 	if s.off {
 		return
 	}
-	title := s.title(s.sessionID())
+	title := rosterTitle(s.title(s.sessionID()))
 	if title == "" {
 		if s.reported {
 			s.clear(ctx)
@@ -81,6 +83,31 @@ func (s *titleSharer) refresh(ctx context.Context) {
 		return
 	}
 	s.reported = true
+}
+
+// rosterTitleRunes is the relay's limit on a roster line (the good_at cap).
+const rosterTitleRunes = 120
+
+// rosterTitle makes a session title into a line the relay accepts: valid
+// UTF-8, line breaks and other control characters turned into spaces,
+// invisible format characters dropped, runs of space collapsed, and at
+// most rosterTitleRunes characters. A /rename title can break any of
+// those, and the relay refuses the whole line rather than trimming it.
+func rosterTitle(title string) string {
+	title = strings.Map(func(r rune) rune {
+		switch {
+		case unicode.Is(unicode.Cf, r):
+			return -1
+		case unicode.IsControl(r):
+			return ' '
+		}
+		return r
+	}, strings.ToValidUTF8(title, ""))
+	title = strings.Join(strings.Fields(title), " ")
+	if r := []rune(title); len(r) > rosterTitleRunes {
+		title = strings.TrimSpace(string(r[:rosterTitleRunes]))
+	}
+	return title
 }
 
 // clear removes this server's line from the relay, if it may hold one.

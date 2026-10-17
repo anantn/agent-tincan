@@ -744,9 +744,11 @@ func (s *Server) recipientTarget(ctx context.Context, agent string) *envelope.Ta
 }
 
 // wakeVia is how the relay reaches agent: "socket" while one of its
-// sessions has advertised socket wake within SessionGrace, else its
+// sessions is still peeking with the socket wake advert, else its
 // configured wake method, and "" with no wake config. listening is the
-// roster's online test.
+// roster's online test. A session whose socket kept failing stops peeking
+// and keeps itself live with whoami, which carries no advert, so the
+// socket record counts only as long as a poll would, not for SessionGrace.
 func (s *Server) wakeVia(agent string) (via string, listening bool) {
 	if s.wake != nil {
 		via = s.wake.WakeMethod(agent)
@@ -755,7 +757,7 @@ func (s *Server) wakeVia(agent string) (via string, listening bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, t := range s.socketWake[agent] {
-		if now.Sub(t) < SessionGrace {
+		if s.polledRecently(t, now) {
 			via = envelope.WakeViaSocket
 			break
 		}

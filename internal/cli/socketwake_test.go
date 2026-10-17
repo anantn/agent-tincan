@@ -332,3 +332,108 @@ func TestClaudeSocketIdleIgnoresStatusAge(t *testing.T) {
 		t.Fatal("busy session reads idle")
 	}
 }
+
+// A relay that predates pending lists gives only a count, so a new request
+// that brings the count back to one it already announced looks the same as
+// the old one. The count key is not kept past socketRecordKeep even while
+// it is listed, and a change in the count drops it at once, so such a
+// request is not kept from its turn for good.
+func TestSocketWakeCountOnlyRelayAnnouncesAgain(t *testing.T) {
+	fastChannel(t, 10*time.Millisecond, time.Hour)
+	old := socketRecordKeep
+	socketRecordKeep = 150 * time.Millisecond
+	t.Cleanup(func() { socketRecordKeep = old })
+	var queued atomic.Int32
+	queued.Store(1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := queued.Load()
+		_ = json.NewEncoder(w).Encode(map[string]any{"waiting": n, "queued": n})
+	}))
+	defer srv.Close()
+	r, _ := client.NewRelay(srv.URL, "")
+	w := newFakeWindow()
+	startSocket(t, r, w, socketShared{dir: t.TempDir(), agent: "muse"})
+	if got := waitPushes(t, w.recordPusher, 1); len(got) != 1 {
+		t.Fatalf("first pushes = %v", got)
+	}
+	queued.Store(2)
+	if got := waitPushes(t, w.recordPusher, 2); len(got) != 2 {
+		t.Fatalf("pushes after the count rose = %v", got)
+	}
+	queued.Store(1)
+	if got := waitPushes(t, w.recordPusher, 3); len(got) != 3 {
+		t.Fatalf("pushes after the count came back to one = %v", got)
+	}
+}
+
+// Which wake path tincan mcp runs: --channel wins whatever --wake-socket
+// says, --wake-socket=false keeps only the keepalive and never reads the
+// session socket, and a socket that does not check out falls back to the
+// keepalive so the window still keeps its replies.
+func TestPickWake(t *testing.T) {
+	verified := &claudeSocketPusher{}
+	for _, c := range []struct {
+		name                string
+		channel, wakeSocket bool
+		env                 *claudeSocketPusher
+		want                wakePath
+		wantRead            bool
+	}{
+		{"channel wins", true, true, verified, wakeByChannel, false},
+		{"socket wake off", false, false, verified, wakeByKeepalive, false},
+		{"socket checks out", false, true, verified, wakeBySocket, true},
+		{"no session socket", false, true, nil, wakeByKeepalive, true},
+	} {
+		read := false
+		route, p := pickWake(c.channel, c.wakeSocket, func() *claudeSocketPusher { read = true; return c.env })
+		if route != c.want || read != c.wantRead {
+			t.Errorf("%s: route %v (read socket %v), want %v (read %v)", c.name, route, read, c.want, c.wantRead)
+		}
+		if (route == wakeBySocket) != (p != nil) {
+			t.Errorf("%s: route %v with pusher %v", c.name, route, p)
+		}
+	}
+}
+
+func TestWakeSocketOnByDefault(t *testing.T) {
+	f := mcpCmd().Flags().Lookup("wake-socket")
+	if f == nil || f.DefValue != "true" {
+		t.Fatalf("--wake-socket flag = %+v, want one that defaults to true", f)
+	}
+}
+
+// Once a fresh check of the socket passes, socketWake pushes again and the
+// relay hears socket wake again.
+func TestSocketWakeResumesAfterReverify(t *testing.T) {
+	fastChannel(t, 10*time.Millisecond, time.Hour)
+	var features sync.Map
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/poll" {
+			features.Store(r.Header.Get(client.FeaturesHeader), true)
+			_ = json.NewEncoder(w).Encode(map[string]any{"waiting": 1, "queued": 1, "pending": []map[string]string{{"id": "q1", "from": "grokbot"}}})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"agent": "muse"})
+	}))
+	defer srv.Close()
+	r, _ := client.NewRelay(srv.URL, "")
+	failing, healthy := newFakeWindow(), newFakeWindow()
+	failing.fail.Store(true)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		socketWake(ctx, r, failing, socketShared{dir: t.TempDir(), agent: "muse"}, socketWakeTiming{keepalive: 10 * time.Millisecond, retry: 50 * time.Millisecond}, func() (socketTarget, error) {
+			return healthy, nil
+		})
+	}()
+	got := waitPushes(t, healthy.recordPusher, 1)
+	cancel()
+	<-done
+	if len(got) != 1 || got[0]["request_ids"] != "q1" {
+		t.Fatalf("pushes after the socket checked out again = %v", got)
+	}
+	if _, ok := features.Load("ping," + client.SocketWakeFeature); !ok {
+		t.Fatal("resumed peeks did not advertise socket wake")
+	}
+}

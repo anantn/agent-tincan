@@ -70,14 +70,11 @@ default.`,
 			}
 			files := mcpserver.LocalFiles(client.AttachmentDir(cfg))
 			watch := mcpserver.Watch(mcpserver.NewBuildWatch(ownBinary(), Version))
-			if !channel {
+			route, p := pickWake(channel, wakeSocket, claudeSocketFromEnv)
+			if route != wakeByChannel {
 				ctx, cancel := context.WithCancel(cmd.Context())
 				defer cancel()
-				var p *claudeSocketPusher
-				if wakeSocket {
-					p = claudeSocketFromEnv()
-				}
-				if p != nil {
+				if route == wakeBySocket {
 					// The socket wake peeks, which keeps the session live.
 					shared := socketShared{dir: socketWakeDir(), agent: cfg.Agent}
 					timing := socketWakeTiming{keepalive: sessionKeepalive, retry: socketRetryAfter}

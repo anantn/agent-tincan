@@ -7,11 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mvanhorn/agent-tincan/internal/client"
+	"github.com/mvanhorn/agent-tincan/internal/identity"
 )
 
 // recordReporter records the working-on calls a titleSharer makes.
@@ -138,6 +141,27 @@ func TestShareTitleEmptyTitle(t *testing.T) {
 	s.refresh(t.Context())
 	s.refresh(t.Context())
 	wantReports(t, rep, "PUT Fix flaky relay test", "DELETE")
+}
+
+// A title the relay would refuse (too long, or with a line break or other
+// control character, as a /rename title can be) is cut down to one line the
+// relay accepts, so the session still shows what it is working on.
+func TestShareTitleFitsTheRosterLine(t *testing.T) {
+	title := "  Fix the\nflaky\u200b relay test " + strings.Repeat("x", 200)
+	rep := &recordReporter{}
+	s := &titleSharer{r: rep, sessionID: func() string { return sessionA }, title: func(string) string { return title }}
+	s.refresh(t.Context())
+	got := rep.got()
+	if len(got) != 1 || !strings.HasPrefix(got[0], "PUT Fix the flaky relay test xxx") {
+		t.Fatalf("calls = %q", got)
+	}
+	line := strings.TrimPrefix(got[0], "PUT ")
+	if n := utf8.RuneCountInString(line); n > 120 {
+		t.Fatalf("reported %d characters, want at most 120", n)
+	}
+	if _, err := identity.CheckRosterLine("the working-on line", line); err != nil {
+		t.Fatalf("relay would refuse %q: %v", line, err)
+	}
 }
 
 // The loop reports at once and on every tick, and stopping it removes the

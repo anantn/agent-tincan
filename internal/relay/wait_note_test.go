@@ -49,21 +49,18 @@ func TestSendTargetSocketWakeListening(t *testing.T) {
 	}
 }
 
-// A socket-wake session whose last peek is older than the poll hold plus
-// slack is still the way the agent wakes, but it is not listening. The
-// record lapses after SessionGrace, and a peek without the advert drops it
-// at once, so the configured method shows again.
+// A socket-wake session counts only while it is still peeking: once its
+// last peek is older than the poll hold plus slack (a socket that failed
+// and fell back to the keepalive, which does not peek), the configured
+// method shows again, so askers are not told a session will be prompted.
+// A peek without the advert drops the record at once.
 func TestSendTargetSocketWakeStale(t *testing.T) {
 	h, clk, fw := wakeHarness(t)
 	fw.methods["muse"] = "channel"
 	peekAs(h, museAddr, "s1", "ping,socket-wake")
 	clk.advance(h.srv.cfg.PollHold + 31*time.Second)
-	if got := sendTarget(h, "muse"); got == nil || got.WakeVia != "socket" || got.Listening {
-		t.Fatalf("quiet socket-wake muse: target %+v", got)
-	}
-	clk.advance(SessionGrace)
 	if got := sendTarget(h, "muse"); got == nil || got.WakeVia != "channel" || got.Listening {
-		t.Fatalf("socket-wake session gone: target %+v", got)
+		t.Fatalf("socket-wake muse that stopped peeking: target %+v", got)
 	}
 	peekAs(h, museAddr, "s1", "ping,socket-wake")
 	peekAs(h, museAddr, "s1", "ping")

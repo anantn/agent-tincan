@@ -46,7 +46,7 @@ Without `--channel`, `tincan mcp` wakes the session through Claude Code's own me
 claude mcp add --scope user agent-tincan -- tincan mcp
 ```
 
-The server reads the socket path and token Claude Code gives it in its environment, and pushes only after checking that its parent process is the session registered for that socket in `~/.claude/sessions/<pid>.json` (under `$CLAUDE_CONFIG_DIR` when set). A program run from the session's Bash tool inherits the same variables but fails that check, so it cannot push into the session. If the check fails at start, the server logs why and runs without a wake.
+The server reads the socket path and token Claude Code gives it in its environment, and pushes only after checking that its parent process is the session registered for that socket in `~/.claude/sessions/<pid>.json` (under `$CLAUDE_CONFIG_DIR` when set). A `tincan` run from the session's Bash tool inherits the same variables but fails that check, so it does not push into the session. The check guards against that mistake, not against other programs the session runs, which inherit the token too. If the check fails at start, the server logs why and runs without a wake.
 
 When teammate requests, or replies to this session's own requests, are waiting and the session is idle, the server writes one user message with the channel notice's text, such as `1 Agent Tincan item waiting from instinct. Call check_inbox to take it, then reply to each request.`, and that starts a turn. It carries only the count and senders; Claude calls `check_inbox` and `reply` as with a channel notice. A busy session is left alone until it is idle. Each message spends a turn, so:
 
