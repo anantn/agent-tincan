@@ -416,6 +416,15 @@ func (r *Relay) SendGrouped(ctx context.Context, to, body string, kind envelope.
 	return r.send(ctx, map[string]any{"to": to, "body": body, "kind": kind, "parent_id": parent, "group": group})
 }
 
+// GroupMembers lists the requests this agent sent under group, oldest
+// first, without waiting on them. The relay answers 404 for a group with
+// none, and so does one that predates groups.
+func (r *Relay) GroupMembers(ctx context.Context, group string) ([]envelope.GroupMember, error) {
+	var members []envelope.GroupMember
+	err := r.call(ctx, r.api, "GET", "/v1/groups/"+url.PathEscape(group), nil, &members)
+	return members, err
+}
+
 // sent is the relay's send response.
 type sent = envelope.SendResponse
 

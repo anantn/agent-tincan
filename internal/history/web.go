@@ -98,6 +98,10 @@ type WebAgent struct {
 	Allowlist func() ([]string, error)
 	// StatePath holds each asker's last conversation id (0600).
 	StatePath string
+	// PassedPath lists the conversations a pass opened (0600): no asker
+	// may continue one with conversation:, and a pass seed is refused
+	// when it is empty, since its chat could not be listed.
+	PassedPath string
 	// Thread is the one conversation of a site that has one (a dot's DM
 	// thread, from --thread). Every request goes there.
 	Thread string
@@ -408,6 +412,16 @@ func (w *WebAgent) Handle(ctx context.Context, req envelope.Request) {
 			return
 		}
 		wr.convID = id
+		if reason, status := w.refuseContinuation(id, label); reason != "" {
+			w.logf("request %s from %s: refused continuing conversation %s: %s", req.ID, req.From, id, status)
+			w.reply(ctx, req, reason, status, nil)
+			return
+		}
+	}
+	seed := !site.oneThread && isPassSeed(req, wr)
+	if seed && w.PassedPath == "" {
+		w.reply(ctx, req, fmt.Sprintf("Nothing was sent to %s: the %s agent keeps no list of passed chats, so it cannot take a pass.", label, w.Name), envelope.StatusFailed, nil)
+		return
 	}
 	if len(wr.message) > MaxSendMessage {
 		w.reply(ctx, req, fmt.Sprintf("Nothing was sent to %s: the message is %d bytes, over the %d byte limit.", label, len(wr.message), MaxSendMessage), envelope.StatusFailed, nil)
@@ -443,6 +457,9 @@ func (w *WebAgent) Handle(ctx context.Context, req envelope.Request) {
 				}
 			}
 			w.reply(ctx, req, "Image submission is uncertain. Files may already have reached the vendor. This request will not be sent again automatically; inspect the conversation before a new ask.", envelope.StatusFailed, nil)
+			return
+		}
+		if seed && !w.markPassed(ctx, req, e.ConversationID, label) {
 			return
 		}
 		w.resume(ctx, req, wr, e)
@@ -604,6 +621,15 @@ func (w *WebAgent) Handle(ctx context.Context, req envelope.Request) {
 		if err := recordWebUsed(w.UsedPath, res.ConversationID, time.Now()); err != nil {
 			w.logf("used list %s: %v", w.UsedPath, err)
 		}
+	}
+	if seed {
+		// A passed chat is the owner's to continue: it is listed before
+		// its id goes out, and never becomes the asker's own thread.
+		if !w.markPassed(ctx, req, res.ConversationID, label) {
+			return
+		}
+		w.answer(ctx, req, anchor, entry, note)
+		return
 	}
 	st.Conversations[req.From] = webMemory{ID: res.ConversationID, Updated: time.Now().UTC()}
 	w.saveState(st)

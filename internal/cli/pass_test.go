@@ -111,6 +111,25 @@ func TestPassSendsSeedAndNamesNewChat(t *testing.T) {
 	}
 }
 
+// pass serve refuses to run when the relay does not store kind pass for
+// it, saying how to fix it.
+func TestPassServeRefusesWithoutPassKind(t *testing.T) {
+	t.Setenv("TINCAN_RELAY", "")
+	t.Setenv("TINCAN_PROXY", "")
+	m := testrelay.New(t, relay.Config{})
+	m.JoinOnMachineOf(t, "muse", "pass")
+	cfg := filepath.Join(t.TempDir(), "pass.json")
+	b, _ := json.Marshal(client.Config{Relay: m.URL("pass"), Agent: "pass"})
+	if err := os.WriteFile(cfg, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	none := filepath.Join(t.TempDir(), "none.txt")
+	_, _, err := runSplit(t, passCmd(), "serve", "--config", cfg, "--allowlist", none, "--history-allowlist", none, "--window-file", none)
+	if err == nil || !strings.Contains(err.Error(), "refuses to run") || !strings.Contains(err.Error(), "tincan kind pass pass") {
+		t.Fatalf("serve = %v, want a refusal naming the kind fix", err)
+	}
+}
+
 // A bare source passes its newest conversation.
 func TestPassBareSourceTakesNewest(t *testing.T) {
 	_, web, _ := passMesh(t, claudeChat("newest", 2), claudeChat("older", 2))

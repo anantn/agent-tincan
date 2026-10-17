@@ -16,7 +16,9 @@ import (
 
 	"github.com/mvanhorn/agent-tincan/internal/client"
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
+	"github.com/mvanhorn/agent-tincan/internal/history"
 	"github.com/mvanhorn/agent-tincan/internal/onboard"
+	"github.com/mvanhorn/agent-tincan/internal/pass"
 	"github.com/mvanhorn/agent-tincan/internal/wake"
 )
 
@@ -920,10 +922,13 @@ func heldCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// to_kind is empty from a relay that predates it.
+			// to_kind, pass and pass_error are empty from a relay that
+			// predates them.
 			var reqs []struct {
 				envelope.Request
-				ToKind string `json:"to_kind"`
+				ToKind    string        `json:"to_kind"`
+				Pass      *pass.Request `json:"pass"`
+				PassError string        `json:"pass_error"`
 			}
 			if err := r.Raw(cmd.Context(), "GET", "/v1/admin/held", nil, &reqs); err != nil {
 				return err
@@ -934,6 +939,12 @@ func heldCmd() *cobra.Command {
 					to += " (" + req.ToKind + ")"
 				}
 				cmd.Printf("%s  %s -> %s  chain=%s  %s\n", req.ID, req.From, to, strings.Join(req.Chain, " -> "), req.Body)
+				switch {
+				case req.Pass != nil:
+					cmd.Printf("  pass: %s conversation %s -> %s\n", history.SourceLabel(req.Pass.Source), req.Pass.ID, req.Pass.To)
+				case req.PassError != "":
+					cmd.Printf("  pass: will fail: %s\n", req.PassError)
+				}
 				for _, a := range req.Attachments {
 					cmd.Printf("  attachment: %s (%d bytes)\n", a.Name, a.Size)
 				}

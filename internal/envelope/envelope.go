@@ -130,6 +130,12 @@ func (r *Request) RedactFor(agent string) {
 	}
 }
 
+// PassGroupPrefix starts the group id of every seed a pass sends
+// ("pass-<id>"). A grouped ask never fails over, so a seed only reaches
+// the destination the owner named; the destination web agent knows a
+// seed by it, and the relay audits one as pass_sent.
+const PassGroupPrefix = "pass-"
+
 // GroupMember identifies a request without fetching its result or marking replies seen.
 type GroupMember struct {
 	ID string `json:"id"`

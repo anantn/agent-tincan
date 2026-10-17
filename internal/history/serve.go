@@ -585,6 +585,10 @@ func ChainDenied(allowlist func() ([]string, error), req envelope.Request, agent
 	return ""
 }
 
+// ReadFailure phrases a reader error answering q for a reply, from a
+// fixed template (never the page's notice).
+func ReadFailure(q Query, err error) string { return readFailure(q, err) }
+
 // readFailure phrases a reader error for the reply.
 func readFailure(q Query, err error) string {
 	var ue *UnavailableError

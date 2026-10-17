@@ -745,6 +745,33 @@ func TestCouncilServiceBlock(t *testing.T) {
 	}
 }
 
+// pass is a product service: its runtime name resolves to the pass kind,
+// it waits on the relay, and teammates learn to name the chat, never
+// "latest", and that the ask waits for the owner's approval.
+func TestPassServiceBlock(t *testing.T) {
+	k := build(t, Options{RelayURL: relayURL, Owner: "Matt", Roster: []Member{{Name: "pass"}}})
+	b := block(t, k, "pass")
+	if b.Kind != KindPass || b.Wake != "wait" {
+		t.Fatalf("pass block kind/wake = %s/%s", b.Kind, b.Wake)
+	}
+	for _, want := range []string{"is a service", "from: <chat URL>", "to: <web agent>", `never "latest"`,
+		"comes back held", "tincan approve <request id>", "never the chat's text", "cannot continue it"} {
+		if !strings.Contains(b.Instructions, want) {
+			t.Errorf("pass instructions missing %q:\n%s", want, b.Instructions)
+		}
+	}
+	setup := strings.Join(b.Setup, "\n")
+	for _, want := range []string{"tincan invite pass --kind pass", "tincan kind pass pass", "tincan pass install",
+		"com.agenttincan.pass.plist", "pass-allow.txt", "history-allow.txt", "history-window.json", `method "wait"`} {
+		if !strings.Contains(setup, want) {
+			t.Errorf("pass setup missing %q:\n%s", want, setup)
+		}
+	}
+	if StockGoodAt("pass", "") == "" {
+		t.Error("pass has no stock good-at line")
+	}
+}
+
 // With a council agent on the roster, Agent Tincan passes "put this to the
 // council" to it, and never approves a held council itself.
 func TestOperatorRoutesCouncil(t *testing.T) {

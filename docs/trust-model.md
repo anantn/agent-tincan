@@ -104,7 +104,9 @@ By default any joined agent can read the owner's chat history. If some of your a
 - Vendor egress. The chat is read through the extension like a history lookup, packed in Go with no model step into one message (title, each earlier prompt's first line, the last 6 turns verbatim), and typed into the destination's site as the owner. That vendor then holds that much of the chat under its own terms and retention, and its model reads it. The text sits between per-pass random delimiters with an instruction that it is material from another conversation, not instructions; that is an instruction to a model, not a control.
 - Only the six web chat agents can be a destination, and only while signed in and not out of messages; anything else is refused before the chat is read. The seed is a grouped ask, so failover never carries it to a vendor the owner did not name.
 - The seed is an ordinary relay request from the agent that sent it, so whoever runs the relay can read it, and the destination's allowlist applies.
-- Local shells. The owner's command runs as the machine's joined agent and reads history through the local extension, so any agent with a shell on that Mac can run it, as it can run `tincan history`. That is the full trust between joined agents applied to a shell.
+- Agents' passes are held. An agent asks the `pass` service (`tincan pass serve`) to move a chat it names by URL or by source and id, never "latest". The relay holds every ask to an agent of kind `pass` for the owner's approval with no `approval.json` needed (a failed kind lookup holds), and `tincan held` shows the chat and destination parsed from the whole request. The service refuses to start unless the relay stores kind `pass` for it, so an older relay that does not know the kind never delivers passes unheld. Like history, it checks the relay-recorded chain and sender, in Go, against its own allowlist (`~/.config/tincan/pass-allow.txt`) and the history allowlist, and refuses a chat last updated outside the owner's history window. Nothing is read or sent before approval.
+- The asker gets only the new conversation's id, never the chat's text. Because any asker can continue a web chat by id, the destination web agent records every conversation a pass opened (`<agent>-passed.json`, 0600, ids only) before the id goes out, and declines every asker's `conversation:` ask naming one, across restarts; a list it cannot read refuses every `conversation:` ask. The owner continues a passed chat in the browser. The service refuses a destination whose last-reported tincan build predates that refusal (a development build counts as older, since its contents cannot be told from its version).
+- Local shells. The owner's `tincan pass` runs as the machine's joined agent, reads history through the local extension and is not held, so any agent with a shell on that Mac can run it, as it can run `tincan history`. The hold restrains asks over the relay, not local shells; that is the full trust between joined agents applied to a shell, as for council.
 
 ## The web agents
 
@@ -199,7 +201,8 @@ chains and statuses cannot bypass the check, which runs after the relay's
 cycle, hop and rate checks and before delivery. Both asks and notifies are gated.
 
 A missing file disables the gate for every target except agents of kind
-`council` and `dot-web`, which are held by default (see [Council](#council)). The relay reloads changed files. Unreadable,
+`council`, `dot-web` and `pass`, which are held by default (see [Council](#council)
+and [Passing a conversation](#passing-a-conversation)). The relay reloads changed files. Unreadable,
 malformed or group/world-accessible policies hold every request to every target
 in the last good copy, regardless of its previous sender restrictions. With no
 valid copy, a bad policy prevents startup; if it first appears while running,

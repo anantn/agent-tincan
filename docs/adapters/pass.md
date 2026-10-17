@@ -18,6 +18,37 @@ The destination must be one of the six web chat teammates (`chatgpt-web`, `claud
 
 The command waits for the destination to open the chat (`--wait`, 10 minutes by default) and prints the conversation it opened, for example `Passed to chatgpt-web. ChatGPT conversation: 68f0...`. Open it in the browser and carry on there. It prints nothing of the destination's answer.
 
+## From an agent
+
+Agents ask the `pass` teammate, a Go service (`tincan pass serve`) that runs on the Mac with Chrome and the extension, next to history. The body names one chat and one destination, each on its own line:
+
+```
+from: https://claude.ai/chat/<id>
+to: chatgpt-web
+```
+
+`from: <source> <conversation id>` (for example `from: chatgpt 68f0...`) works too. A pass never takes "latest": an agent names the chat it means. Anything else fails with the expected form.
+
+For each ask the service, in order:
+
+1. Waits for the owner. The relay holds every ask to an agent of kind `pass` with no `approval.json` needed. `tincan held` shows the chat and the destination parsed from the whole request (`pass: claude.ai conversation <id> -> chatgpt-web`), or why it will fail; `tincan approve <id>` starts it.
+2. Declines unless every agent in the request's relay-recorded chain is on `~/.config/tincan/pass-allow.txt` and on the history allowlist (`~/.config/tincan/history-allow.txt`). No file means every joined agent; an unreadable file declines everyone. Both are reread for every ask.
+3. Refuses a destination that is not a web chat teammate, is signed out or out of messages, or last called the relay with a tincan build older than 0.18.0 (a development build counts as older), before reading anything.
+4. Reads the chat and refuses it when it was last updated outside the history window's days (`~/.config/tincan/history-window.json`, 30 days by default; a bad file fails every ask). The window's conversation count does not apply, since the chat is named.
+5. Asks the destination to open a new chat with the seed, as a child of the ask, so the chain and loop rules carry over, grouped `pass-<request id>`. A redelivered ask whose seed already went out waits for that seed instead of sending the chat again.
+6. Replies with the new conversation only: `Passed the claude.ai conversation <id> to chatgpt-web. New ChatGPT conversation: <id>`. The destination's answer is never passed on. If the destination fails, the pass fails with its reason.
+
+The destination web agent lists every conversation a pass opened in `~/.config/tincan/<agent>-passed.json` (0600, ids and times only) before the id goes out, and declines every agent's `conversation:` ask for one of them, the passing agent included, also after a restart. The passed chat never becomes the asker's remembered thread either. You continue it in the browser.
+
+### Install
+
+1. Upgrade the relay, then the web teammates (`tincan upgrade`, then restart them). An older relay refuses the `pass` kind and would never hold passes, so `tincan pass serve` refuses to run until the relay stores kind `pass` for it.
+2. `tincan invite pass --kind pass` on an admin device, then on the Mac: `TINCAN_CONFIG=~/.config/tincan/pass.json tincan join <code> --relay <relay url>`. If it joined without the kind, run `tincan kind pass pass` on an admin device. The service runs only as the agent named `pass`.
+3. `tincan pass install` writes `~/Library/LaunchAgents/com.agenttincan.pass.plist` (logging to `~/Library/Logs/tincan-pass.log`; a systemd user unit on Linux) and prints the command that starts it.
+4. In the relay's `wake.json`, set `pass` to `{"method": "wait"}`.
+
+Each send of a seed is audited on the relay as `pass_sent`, with the request ids, the destination, the byte count and, for an agent's pass, the chat's source and id; never its text.
+
 ## The seed
 
 The new chat starts with one message, built in Go with no model step:
@@ -36,4 +67,4 @@ A seed is grouped (`pass-<id>`), and a grouped ask never fails over, so a pass o
 
 ## Privacy
 
-A pass sends that chat to the destination's vendor: its title, earlier prompts' first lines and last 6 turns are then in that account's history, under that site's terms and retention, and its model reads them. That is the point of a pass, and it is why only you start one from your terminal. See [the trust model](../trust-model.md#passing-a-conversation).
+A pass sends that chat to the destination's vendor: its title, earlier prompts' first lines and last 6 turns are then in that account's history, under that site's terms and retention, and its model reads them. That is the point of a pass, and it is why an agent's pass waits for your approval. Your own `tincan pass` is not held, and any agent with a shell on the Mac can run it, as it can run `tincan history`. See [the trust model](../trust-model.md#passing-a-conversation).

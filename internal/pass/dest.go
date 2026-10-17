@@ -10,18 +10,14 @@ import (
 	"time"
 
 	"github.com/mvanhorn/agent-tincan/internal/client"
+	"github.com/mvanhorn/agent-tincan/internal/envelope"
 	"github.com/mvanhorn/agent-tincan/internal/history"
 	"github.com/mvanhorn/agent-tincan/internal/onboard"
 )
 
-// GroupPrefix starts the group id of every seed a pass sends. A grouped
-// ask never fails over (R8), so a seed only ever reaches the destination
-// the owner named, and a destination web agent knows a seed by it.
-const GroupPrefix = "pass-"
-
-// NewGroup is a fresh seed group id for a pass with no request of its
-// own (the owner's tincan pass).
-func NewGroup() string { return GroupPrefix + rand.Text() }
+// NewGroup is a fresh seed group id (envelope.PassGroupPrefix) for a
+// pass with no request of its own (the owner's tincan pass).
+func NewGroup() string { return envelope.PassGroupPrefix + rand.Text() }
 
 // Destination checks that the roster agent to can take a pass: one of
 // the six web chat kinds, signed in to its site, and not out of messages.
@@ -52,10 +48,8 @@ func Destination(roster []client.AgentInfo, to string, now time.Time) (history.S
 		}
 		return "", fmt.Errorf("%s is out of messages%s; pass to another web chat teammate or try again then", to, until)
 	}
-	for _, src := range history.WebSites {
-		if history.WebAgentName(src) == a.Kind {
-			return src, nil
-		}
+	if src := siteOf(roster, to); src != "" {
+		return src, nil
 	}
 	return "", fmt.Errorf("%s's kind %s has no site", to, a.Kind)
 }

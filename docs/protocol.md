@@ -171,7 +171,11 @@ Admin devices and the local admin socket have these endpoints; agent callers
 receive 403:
 
 - `GET /v1/admin/held`: array of request envelopes, with bodies truncated to
-  200 Unicode characters, including sender, chain and target.
+  200 Unicode characters, including sender, chain and target. Each entry may
+  also carry `to_kind`, the target's kind; for a target of kind `pass`, `pass`
+  (`{"source", "conversation_id", "to"}`, parsed from the whole body as the
+  pass service will read it) or `pass_error` (why it will fail). Older
+  clients ignore them.
 - `POST /v1/admin/requests/{id}/approve`: returns the queued request. A fresh
   normal TTL starts; the original `created_at` is kept. Normal wake follows.
 - `POST /v1/admin/requests/{id}/deny`: optional `{"reason":"..."}` body;
@@ -186,6 +190,9 @@ leave out a held, never-approved request for every caller but its sender and adm
 The other transitions are audited as `held`, `approved`, and `denied`.
 An optional relay-authored operator `notify` bypasses the gate and is logged
 as `approval_notified`; it never grants the notified agent admin access.
+
+With no `approval.json` entry for them, asks and notifies to agents of kind
+`council`, `dot-web` and `pass` are held by default (a failed kind lookup holds).
 
 Requests retain whether they were ever held and whether the owner approved them.
 For every request that was held and never approved, only its sender and admins
@@ -268,7 +275,7 @@ An entry for an agent on wake method `schedule` (it checks its inbox on its own 
 
 An entry for an agent on wake method `webhook` or `email` that the relay has woken also includes `woken_at` (the last recorded wake: the first send of a silent episode; a later 2xx follow-up does not move it), `wake_result` (`ok`, or why the send and its retry failed: `<host> returned <status>` or `POST to <host> failed: <cause>`, never the URL's path, query or credentials; either one ends in ` (fallback N: <method>)` when the wake went out on fallback path N, for example `ok (fallback 1: email)`) and `unanswered` (true when the agent has not checked in since that wake: the send failed, or more than the relay's `--wake-grace`, default 10 minutes, has passed with no poll). Only a poll is a check-in; other calls, such as a send or a get, do not clear it. The relay keeps the last wake and each agent's last poll across restarts, and after a restart the grace runs from the later of the wake and the relay's start. The agent's next poll clears `unanswered`. Removing an agent drops its last wake. All three are omitted for other agents, for agents never woken, and by older relays.
 
-An entry may also include `good_at`: the owner's line saying what the agent is good at, or, when the owner has set none, a stock line for service kinds (`history`, `notes`, `council`, `chatgpt-web`, `claude-web`, `grok-web`, `gemini-web`, `perplexity-web`, `copilot-web`, `dot-web`) and product-tool kinds (`claude-code`, `codex`, `gemini-cli`, `grok-cli`, `chatgpt`). An agent with no stored kind whose name is one of those kind names gets that kind's line. It is omitted for hosting-shape kinds (`vm-webhook`, `e2b-email`, `proxy-sandbox`, `scheduled`, `generic`), `hermes` and `openclaw` until the owner sets one, and by older relays, and older clients ignore it. The relay resolves the stock line, so every client shows the same roster. Agents read it to choose whom to ask; the relay never routes on it.
+An entry may also include `good_at`: the owner's line saying what the agent is good at, or, when the owner has set none, a stock line for service kinds (`history`, `notes`, `council`, `pass`, `chatgpt-web`, `claude-web`, `grok-web`, `gemini-web`, `perplexity-web`, `copilot-web`, `dot-web`) and product-tool kinds (`claude-code`, `codex`, `gemini-cli`, `grok-cli`, `chatgpt`). An agent with no stored kind whose name is one of those kind names gets that kind's line. It is omitted for hosting-shape kinds (`vm-webhook`, `e2b-email`, `proxy-sandbox`, `scheduled`, `generic`), `hermes` and `openclaw` until the owner sets one, and by older relays, and older clients ignore it. The relay resolves the stock line, so every client shows the same roster. Agents read it to choose whom to ask; the relay never routes on it.
 
 An entry may also include `working_on` and `working_on_others`: the title of the agent's most recently refreshed session that shares one (`tincan mcp --share-title`), and how many of its other sessions share one too. Both are omitted for an agent with no shared title, and by older relays, and older clients ignore them. The title is the session's own description of itself, for agents to read; the relay never routes on it and it grants nothing.
 
@@ -425,3 +432,25 @@ and holds it only until the new reset when the target reports an earlier one.
 Failover adds two `requests` columns, `moved_from` (JSON array, default `''`)
 and `deliver_after` (Unix ms, default 0). An older relay opening the database
 ignores them: it delivers a held-back ask at once and moves nothing.
+
+### Pass
+
+A pass seed is an ordinary ask to a web chat agent whose body starts with
+`new chat`, sent with a `group` that starts with `pass-` (`pass-<request id>`
+from the pass service, `pass-<random>` from the owner's `tincan pass`). Being
+grouped, it never fails over, and its handback gets 409. The relay audits
+each send with such a group as `pass_sent`: the request id, sender, `to` and
+`bytes`, plus the chat's `source` and `conversation_id` when it continues an ask
+to a `pass`-kind agent whose body parses; never the text.
+
+An ask to the pass service names one chat and one destination, each on its own
+line, in either order: `from: <chat URL>` or `from: <source> <conversation id>`,
+and `to: <web agent>`. It never takes `latest`. The service replies with the
+new conversation only: `New <site> conversation: <id>`.
+
+A web agent records the conversation a seed opened in
+`~/.config/tincan/<agent>-passed.json` (0600, ids and times) before it replies,
+and declines every asker's `conversation:` ask naming one; a list it cannot read
+refuses every `conversation:` ask. The seed's conversation never becomes the
+asker's remembered thread. The pass service checks the destination's roster
+`version` and refuses one older than the first release with this refusal.

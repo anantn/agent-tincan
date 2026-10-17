@@ -16,6 +16,8 @@ Docs: https://github.com/mvanhorn/agent-tincan  (README, docs/adapters/<platform
 - Your owner asked you to add ChatGPT and Claude: do PART C.
 - Your owner asked you to add Council (put one question to every model on
   the team): do PART D.
+- Your owner asked you to let agents move a chat to another chat app (pass):
+  do PART E.
 - You are a Sesame agent (no shell, no tailnet): skip every part below,
   including the install. Ask your owner to follow docs/adapters/sesame.md:
   they run `tincan connect sesame` and you add the printed URL as a custom app.
@@ -117,7 +119,7 @@ A5. Join this machine's own agent (you), if you are one of the team:
 
     Then do B3 to B6 for yourself. Kinds: vm-webhook, e2b-email, proxy-sandbox,
     claude-code, chatgpt, hermes, openclaw, codex, gemini-cli, grok-cli,
-    history, council, chatgpt-web, claude-web, grok-web, gemini-web, perplexity-web,
+    history, council, pass, chatgpt-web, claude-web, grok-web, gemini-web, perplexity-web,
     copilot-web, dot-web, scheduled, generic.
     (gemini-cli, grok-cli, grok-web, gemini-web, perplexity-web, copilot-web, dot-web and scheduled need a relay from this
     release or later; on an older relay invite without --kind and run
@@ -156,7 +158,8 @@ A8. You are the operator. Run `tincan onboard --operator <your-name>` and keep i
     requests do not reach or wake the target until approved; denial declines
     them and the hold deadline expires them. See README's Owner approval section.
     Asks to the council agent are held even with no approval.json. Never
-    approve a held council yourself; tell your owner its request id.
+    approve a held council yourself; tell your owner its request id. The
+    same goes for asks to the pass agent (PART E).
 
 Optional: to also manage the team from a laptop, restart the relay with
 `--admin <laptop-machine-name>` (the name `tailscale status` shows). The laptop
@@ -491,6 +494,47 @@ D6. Test: `tincan ask council "Tincan test: in one sentence, what is a tin can t
     `tincan council leaderboard` (--category, --card) to see who wins.
 
 Details: docs/adapters/council.md in the repo.
+
+## PART E: add the pass agent (move a chat to another chat app)
+
+The pass agent moves one of your owner's ChatGPT, claude.ai, Grok, Gemini or
+Copilot chats into a new chat on a web teammate from PART C, so the owner can
+go on in another app. It is a service, not a model. Your owner can pass a chat
+from a terminal without it (`tincan pass <chat URL> --to <web agent>`); the
+service is for agents asking on the owner's behalf.
+
+E1. Upgrade the relay first (from an admin device), then `tincan upgrade` on
+    the Mac with the web teammates and restart them. An older relay refuses
+    the pass kind and would not hold passes; `tincan pass serve` refuses to
+    run until the relay stores kind pass for it, and refuses a web teammate
+    on a build older than the one that refuses agents' continuations of a
+    passed chat.
+E2. On an admin device (PART A6), get an invite code for the name pass with
+    kind pass. The service runs only as the agent named pass.
+E3. On the Mac with Chrome and the extension (PART C), join and install:
+
+        TINCAN_CONFIG=~/.config/tincan/pass.json tincan join <CODE> --relay http://tincan-relay
+        tincan pass install
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.agenttincan.pass.plist
+
+    In the relay's wake.json, set pass to {"method": "wait"}.
+E4. Approval: the relay holds every ask to pass for your owner, even with no
+    approval.json, because approving it sends one of the owner's chats to
+    another vendor. `tincan held` shows which chat would move where. Never
+    approve a held pass yourself. Every agent in the request's chain must
+    also be on ~/.config/tincan/pass-allow.txt (no file: every joined agent)
+    and on the history allowlist, and the chat must be inside the history
+    window.
+E5. To ask: name the chat, never "latest", on two lines:
+
+        tincan ask pass "from: https://claude.ai/chat/<id>
+        to: chatgpt-web"
+
+    (or `from: <source> <conversation id>`). The reply names only the new
+    conversation; the owner continues it in the browser, and the web teammate
+    refuses any agent's `conversation:` ask for it.
+
+Details: docs/adapters/pass.md in the repo.
 
 Reachability: run `tincan ping <teammate> --wait 60s` (`--json` for a result
 and round_trip_ms). The target must advertise ping support first; older

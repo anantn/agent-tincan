@@ -172,9 +172,10 @@ func (p *Policy) CheckMove(ctx context.Context, req envelope.Request, to string)
 // owner's approval even with no approval.json entry. A council sends the ask
 // on to every model vendor on the team. dot-web types each request into the
 // owner's dot DM as the owner, and a dot acts through the owner's connected
-// apps. Replies and answers never pass through Prepare, so replies to a
-// dot's own asks are not held.
-var holdByDefault = map[string]bool{onboard.KindCouncil: true, onboard.KindDotWeb: true}
+// apps. A pass sends one of the owner's chats to another vendor. Replies
+// and answers never pass through Prepare, so replies to a dot's own asks
+// are not held.
+var holdByDefault = map[string]bool{onboard.KindCouncil: true, onboard.KindDotWeb: true, onboard.KindPass: true}
 
 // holdByKind holds a request to an agent whose kind is in holdByDefault and
 // that approval.json does not name, even with no approval.json at all. An

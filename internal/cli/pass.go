@@ -3,7 +3,11 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"os"
+	"os/signal"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -97,6 +101,7 @@ func passCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.AddCommand(passServeCmd(), passInstallCmd())
 	cmd.Flags().StringVar(&to, "to", "", "the web chat teammate that opens the new chat (chatgpt-web, claude-web, ...)")
 	cmd.Flags().StringVar(&id, "id", "", "with a source name, the conversation to pass (default: the newest)")
 	cmd.Flags().DurationVar(&wait, "wait", DefaultPassWait, "how long to wait for the destination to open the chat")
@@ -141,4 +146,134 @@ func waitFinal(cmd *cobra.Command, r *client.Relay, id string, wait time.Duratio
 			return res, err
 		}
 	}
+}
+
+// defaultPassAllowlistPath is the owner's list of agents that may ask
+// the pass service, beside the history allowlist.
+func defaultPassAllowlistPath() string {
+	return filepath.Join(filepath.Dir(history.DefaultAllowlistPath()), "pass-allow.txt")
+}
+
+func passServeCmd() *cobra.Command {
+	var configPath, allowPath, historyAllowPath, windowPath string
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Run the pass agent: move a chat a teammate names to a web chat teammate, once the owner approves",
+		Long: "Long-polls the relay as the pass agent. The relay holds every ask to it for the owner's approval.\n" +
+			"For each approved ask it, in order:\n" +
+			"  1. declines unless every agent in the relay-recorded chain is on the pass allowlist and on the history allowlist;\n" +
+			"  2. reads the request: \"from: <chat URL>\" (or \"from: <source> <id>\") and \"to: <web agent>\", never \"latest\";\n" +
+			"  3. refuses a destination that is not a web chat teammate, is signed out or out of messages, or runs a build\n" +
+			"     older than " + pass.GuardVersion + ", before reading anything;\n" +
+			"  4. reads the chat through the Tincan Chrome extension and refuses it when it was last updated outside the\n" +
+			"     owner's history window;\n" +
+			"  5. asks the destination to open a new chat with it, grouped so it never fails over, and replies with the\n" +
+			"     new conversation's id only.\n" +
+			"It refuses to run unless the relay stores kind pass for this agent. Normally started by the service\n" +
+			"definition tincan pass install writes. See docs/adapters/pass.md.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if configPath == "" {
+				configPath = serviceConfigPath(pass.DefaultAgentName)
+			}
+			configPath = expandHome(configPath)
+			cfg, err := client.LoadConfigFrom(configPath)
+			if err != nil {
+				return fmt.Errorf("pass config %s: %w", configPath, err)
+			}
+			if cfg.Relay == "" {
+				return fmt.Errorf("no relay configured in %s: run TINCAN_CONFIG=%s tincan join <code> --relay http://tincan-relay", configPath, configPath)
+			}
+			if cfg.Agent != "" && cfg.Agent != pass.DefaultAgentName {
+				return wrongServeAgent("pass serve", pass.DefaultAgentName, configPath+" is joined as", cfg.Agent)
+			}
+			if allowPath == "" {
+				allowPath = defaultPassAllowlistPath()
+			}
+			if historyAllowPath == "" {
+				historyAllowPath = history.DefaultAllowlistPath()
+			}
+			allowPath, historyAllowPath = expandHome(allowPath), expandHome(historyAllowPath)
+			allowed, err := history.LoadAllowlist(allowPath)
+			if err != nil {
+				return fmt.Errorf("pass allowlist: %w", err)
+			}
+			historyAllowed, err := history.LoadAllowlist(historyAllowPath)
+			if err != nil {
+				return fmt.Errorf("history allowlist: %w", err)
+			}
+			if windowPath == "" {
+				windowPath = history.DefaultWindowPath()
+			}
+			windowPath = expandHome(windowPath)
+			r, err := client.NewRelayForFile(cfg, configPath)
+			if err != nil {
+				return err
+			}
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			if client.NeedsRelayInfo(cfg) {
+				learnRelayKeyWithin(ctx, r)
+			}
+			// The relay, not the config file, says who this machine is.
+			me, err := r.WhoAmI(ctx)
+			if err != nil {
+				return fmt.Errorf("pass serve: could not confirm this agent's identity with the relay: %w", client.RejoinHint(err, cfg.Relay))
+			}
+			if me.Name != pass.DefaultAgentName {
+				return wrongServeAgent("pass serve", pass.DefaultAgentName, "the relay knows the machine using "+configPath+" as", me.Name)
+			}
+			svc := &pass.Service{
+				Relay:            r,
+				Reader:           passReader,
+				Allowlist:        history.FileAllowlist(allowPath),
+				HistoryAllowlist: history.FileAllowlist(historyAllowPath),
+				WindowFile:       windowPath,
+				Log:              cmd.ErrOrStderr(),
+			}
+			cmd.PrintErrf("tincan pass: serving as %s on %s (%s; %s)\n", me.Name, cfg.Relay,
+				history.DescribeAllowlist(allowPath, allowed), history.DescribeAllowlist(historyAllowPath, historyAllowed))
+			w, werr := history.LoadWindow(windowPath)
+			cmd.PrintErrf("tincan pass: %s\n", history.DescribeWindow(windowPath, w, werr))
+			err = svc.Run(ctx)
+			if ctx.Err() != nil {
+				cmd.PrintErrln("tincan pass: stopped")
+				return nil
+			}
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&configPath, "config", "", "the pass agent's client config (default: $TINCAN_CONFIG, else ~/.config/tincan/pass.json)")
+	cmd.Flags().StringVar(&allowPath, "allowlist", "", "file of agents allowed to ask for a pass (default: ~/.config/tincan/pass-allow.txt; missing or * means every joined agent)")
+	cmd.Flags().StringVar(&historyAllowPath, "history-allowlist", "", "the history allowlist every asker must also be on (default: ~/.config/tincan/history-allow.txt)")
+	cmd.Flags().StringVar(&windowPath, "window-file", "", `the owner's history window, {"days": N, "max": N} (default: ~/.config/tincan/history-window.json)`)
+	return cmd
+}
+
+func passInstallCmd() *cobra.Command {
+	var binary string
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Write the pass service definition (launchd on macOS, systemd on Linux); does not start it",
+		Long: "Writes a launchd agent (" + pass.ServiceLabel + ") on macOS, or a systemd user unit on Linux, that runs\n" +
+			"tincan pass serve with TINCAN_CONFIG=~/.config/tincan/pass.json and keeps it running. It prints the\n" +
+			"command that starts the service and never starts it itself.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			res, err := pass.InstallService(history.ServiceOptions{Binary: binary})
+			if err != nil {
+				return err
+			}
+			cmd.Printf("pass service definition: %s (not started)\n", res.Path)
+			home, _ := os.UserHomeDir()
+			cfgPath := filepath.Join(home, ".config", "tincan", "pass.json")
+			if cfg, err := client.LoadConfigFrom(cfgPath); err != nil || cfg.Relay == "" {
+				cmd.Printf("pass is not joined yet; first invite it with tincan invite pass --kind pass, then run:\n  TINCAN_CONFIG=%s tincan join <code> --relay <relay url>\n", cfgPath)
+			}
+			cmd.Printf("start it with:\n  %s\n", res.Next)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&binary, "binary", "", "tincan binary the service runs (default: this executable)")
+	return cmd
 }
