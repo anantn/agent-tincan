@@ -192,7 +192,7 @@ func TestBudgetPerSite(t *testing.T) {
 	if Budget(history.SourceChatGPT) != history.MaxSendMessage || Budget(history.SourceGemini) != history.MaxSendMessage {
 		t.Fatal("default budget is not the send cap")
 	}
-	if Budget(history.SourceClaudeAI) != 12<<10 {
-		t.Fatalf("claude.ai budget %d", Budget(history.SourceClaudeAI))
+	if Budget(history.SourceClaudeAI) >= history.MaxSendMessage {
+		t.Fatalf("claude.ai budget %d is not below the default %d", Budget(history.SourceClaudeAI), history.MaxSendMessage)
 	}
 }

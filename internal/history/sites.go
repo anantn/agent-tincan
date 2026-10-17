@@ -109,27 +109,23 @@ type webSite struct {
 	oneThread bool
 }
 
-// convName names src's conversation in a reply footer ("ChatGPT
-// conversation", "your dot's DM").
 // ConversationName is how a web agent's reply footer names a site's
 // conversation ("ChatGPT conversation", "your dot's DM"): the footer is
 // "<ConversationName>: <id>".
-func ConversationName(src Source) string { return convName(src) }
-
-func convName(src Source) string {
+func ConversationName(src Source) string {
 	if s := siteFor(src); s != nil && s.dm != "" {
 		return s.dm
 	}
 	return siteLabel(src) + " conversation"
 }
 
-// theConv is convName in running text ("the ChatGPT conversation",
+// theConv is ConversationName in running text ("the ChatGPT conversation",
 // "your dot's DM").
 func theConv(src Source) string {
 	if s := siteFor(src); s != nil && s.dm != "" {
 		return s.dm
 	}
-	return "the " + convName(src)
+	return "the " + ConversationName(src)
 }
 
 // siteLimiter names who rate-limits the account on src ("ChatGPT" for a

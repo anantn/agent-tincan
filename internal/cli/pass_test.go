@@ -132,13 +132,17 @@ func TestPassServeRefusesWithoutPassKind(t *testing.T) {
 
 // A bare source passes its newest conversation.
 func TestPassBareSourceTakesNewest(t *testing.T) {
-	_, web, _ := passMesh(t, claudeChat("newest", 2), claudeChat("older", 2))
+	newest, older := claudeChat("newest", 2), claudeChat("older", 2)
+	newest.Messages[len(newest.Messages)-1].Text = "water the newest beds"
+	older.Messages[len(older.Messages)-1].Text = "water the older beds"
+	older.UpdatedAt = newest.UpdatedAt.Add(-time.Hour)
+	_, web, _ := passMesh(t, newest, older)
 	got := fakeCouncil(t, web, nil, "ok\n\nChatGPT conversation: c2", envelope.StatusAnswered)
 	if out, _, err := runSplit(t, passCmd(), "claude-ai", "--to", "chatgpt-web"); err != nil {
 		t.Fatalf("pass: %v\n%s", err, out)
 	}
-	if req := <-got; !strings.Contains(req.Body, "Garden plan") {
-		t.Fatalf("seed = %q", req.Body)
+	if req := <-got; !strings.Contains(req.Body, "water the newest beds") || strings.Contains(req.Body, "water the older beds") {
+		t.Fatalf("seed = %q, want the newest chat's last turn only", req.Body)
 	}
 }
 

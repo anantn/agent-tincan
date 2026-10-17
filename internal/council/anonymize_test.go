@@ -31,7 +31,7 @@ func TestStripWebTailRemovesFooterSourcesAndNotes(t *testing.T) {
 // internal/history/dots.go (attachment note ~line 185, delegation note
 // ~line 192), the truncation notice and the "\n\n%s: %s" footer from
 // answer() in internal/history/web.go (the "notice" const and the
-// convName tail), and the footer name "your dot's DM" from the dots
+// ConversationName tail), and the footer name "your dot's DM" from the dots
 // entry of internal/history/sites.go (its dm field).
 func dotReply(answer string, files int, askTarget, thread string, truncated bool) string {
 	texts := []string{answer}

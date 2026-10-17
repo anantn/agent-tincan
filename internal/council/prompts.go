@@ -12,10 +12,6 @@ import (
 // so every member can take every prompt.
 const promptCap = history.MaxSendMessage
 
-// newChat is every prompt's first line, so a web member opens a fresh
-// conversation instead of continuing an earlier council or stage.
-const newChat = "new chat"
-
 // errPromptTooLong is why a council is declined when even its fixed
 // parts do not fit promptCap.
 var errPromptTooLong = fmt.Errorf("the question is too long: a council prompt must fit the web members' %d-byte message limit", promptCap)
@@ -43,7 +39,7 @@ const answerInstructions = `You are one of several AI models answering the same 
 func answerPrompt(question string, inline []contextFile, attached, left []string, nonce string) (string, []string, error) {
 	build := func(texts []string) string {
 		var b strings.Builder
-		b.WriteString(newChat + "\n" + answerInstructions + "\n\nQuestion:\n" + question)
+		b.WriteString(history.NewChat + "\n" + answerInstructions + "\n\nQuestion:\n" + question)
 		writeContext(&b, inline, texts, nonce)
 		if len(attached) > 0 {
 			b.WriteString("\n\nContext files attached to this message: " + strings.Join(attached, ", "))
@@ -122,7 +118,7 @@ FINAL RANKING:
 func reviewPrompt(question string, inline []contextFile, answers []labeledAnswer, nonce string) (string, []string, error) {
 	build := func(ctxTexts, ansTexts []string) string {
 		var b strings.Builder
-		b.WriteString(newChat + "\n" + fmt.Sprintf(reviewInstructions, nonce) + "\n\nQuestion:\n" + question)
+		b.WriteString(history.NewChat + "\n" + fmt.Sprintf(reviewInstructions, nonce) + "\n\nQuestion:\n" + question)
 		writeContext(&b, inline, ctxTexts, nonce)
 		for i, a := range answers {
 			fmt.Fprintf(&b, "\n\nAnswer %s:\n<<<ANSWER %s %s>>>\n%s\n<<<END ANSWER %s>>>", a.Label, a.Label, nonce, ansTexts[i], nonce)
@@ -170,7 +166,7 @@ MINORITY: a minority answer worth a second look and why, or "none"`
 func chairmanPrompt(question string, tally []tallyLine, answers []labeledAnswer, categories []string, nonce string) (string, error) {
 	build := func(texts []string) string {
 		var b strings.Builder
-		b.WriteString(newChat + "\n" + fmt.Sprintf(chairmanInstructions, nonce) + "\n\nQuestion:\n" + question + "\n\nPeer tally, best first:")
+		b.WriteString(history.NewChat + "\n" + fmt.Sprintf(chairmanInstructions, nonce) + "\n\nQuestion:\n" + question + "\n\nPeer tally, best first:")
 		for _, t := range tally {
 			if t.Placement == 0 {
 				fmt.Fprintf(&b, "\nAnswer %s: not ranked by any valid ballot", t.Label)

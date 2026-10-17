@@ -249,6 +249,10 @@ type webRequest struct {
 
 var convURLPattern = regexp.MustCompile(`^/(?:g/[A-Za-z0-9_-]+/)?(?:c|chat)/([A-Za-z0-9][A-Za-z0-9_-]{0,127})/?$`)
 
+// NewChat is the threading first line that opens a fresh conversation
+// (case-insensitive, with an optional trailing colon).
+const NewChat = "new chat"
+
 const threadingHelp = `Put "new chat" or "conversation: <id>" on the first line to choose the conversation, and the message after it.`
 
 // parseWebRequest reads the optional threading line: "new chat" or
@@ -259,7 +263,7 @@ func parseWebRequest(body string) (webRequest, error) {
 	head := strings.ToLower(strings.TrimSpace(first))
 	r := webRequest{mode: threadContinue, message: strings.TrimSpace(body)}
 	switch {
-	case head == "new chat" || head == "new chat:":
+	case head == NewChat || head == NewChat+":":
 		r = webRequest{mode: threadNew, message: strings.TrimSpace(rest)}
 	case strings.HasPrefix(head, "conversation:"):
 		ref := strings.TrimSpace(strings.TrimSpace(first)[len("conversation:"):])
@@ -280,7 +284,7 @@ func parseWebRequest(body string) (webRequest, error) {
 // other first line, a "conversation:" one included, is kept.
 func dropNewChatLine(body string) string {
 	first, rest, _ := strings.Cut(body, "\n")
-	if head := strings.ToLower(strings.TrimSpace(first)); head == "new chat" || head == "new chat:" {
+	if head := strings.ToLower(strings.TrimSpace(first)); head == NewChat || head == NewChat+":" {
 		return strings.TrimSpace(rest)
 	}
 	return strings.TrimSpace(body)
@@ -692,7 +696,7 @@ func (w *WebAgent) answer(ctx context.Context, req envelope.Request, anchor repl
 	if note != "" {
 		tail += "\n\n" + note
 	}
-	tail += fmt.Sprintf("\n\n%s: %s", convName(w.Site), convID)
+	tail += fmt.Sprintf("\n\n%s: %s", ConversationName(w.Site), convID)
 	body, truncated := capReplyTo(text, maxWebReplyBytes-len(tail))
 	if truncated {
 		// Room for the notice comes out of the text too; its numbers are

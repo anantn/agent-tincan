@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
 	"time"
 
 	"github.com/mvanhorn/agent-tincan/internal/client"
@@ -143,8 +142,8 @@ func (s *Service) Handle(ctx context.Context, req envelope.Request) {
 		req = claimed
 	}
 
-	// 1. Access, from relay-set fields only: passing a chat reads it, so
-	// the history allowlist applies as well as the pass one.
+	// Access is checked from relay-set fields only. Passing a chat reads
+	// it, so the history allowlist applies as well as the pass one.
 	for _, check := range []struct {
 		list        func() ([]string, error)
 		agent, what string
@@ -159,14 +158,13 @@ func (s *Service) Handle(ctx context.Context, req envelope.Request) {
 		}
 	}
 
-	// 2. The request names one chat and one destination.
 	r, err := ParseRequest(req.Body)
 	if err != nil {
 		s.reply(ctx, req, "Nothing was passed: "+err.Error()+".", envelope.StatusFailed)
 		return
 	}
 
-	// 3. The owner's window. A bad file fails closed.
+	// A bad window file fails closed.
 	window, err := s.window()
 	if err != nil {
 		s.logf("request %s: window file %s: %v", req.ID, s.WindowFile, err)
@@ -181,7 +179,7 @@ func (s *Service) Handle(ctx context.Context, req envelope.Request) {
 		return
 	}
 
-	// 4. A redelivered request whose seed already went out waits for that
+	// A redelivered request whose seed already went out waits for that
 	// seed rather than sending the chat again.
 	group := envelope.PassGroupPrefix + req.ID
 	seedID, dst, err := s.sentSeed(ctx, group, roster, r.To)
@@ -198,7 +196,6 @@ func (s *Service) Handle(ctx context.Context, req envelope.Request) {
 		s.logf("request %s: redelivered, waiting for the seed %s it already sent", req.ID, seedID)
 	}
 
-	// 5. The answer: the new conversation's id, never the chat's text.
 	res, done := s.wait(ctx, req, seedID, r.To)
 	switch {
 	case !done:
@@ -372,22 +369,13 @@ func InWindow(c history.Conversation, w history.Window, now time.Time) error {
 // siteOf is the site of the web chat agent to on the roster, "" when it is
 // not one.
 func siteOf(roster []client.AgentInfo, to string) history.Source {
-	i := slices.IndexFunc(roster, func(a client.AgentInfo) bool { return a.Name == to })
-	if i < 0 {
-		return ""
-	}
-	for _, src := range history.WebSites {
-		if history.WebAgentName(src) == roster[i].Kind {
-			return src
-		}
-	}
-	return ""
+	return agentSite(rosterAgent(roster, to))
 }
 
 // versionOf is the build agent to last called the relay with.
 func versionOf(roster []client.AgentInfo, to string) string {
-	if i := slices.IndexFunc(roster, func(a client.AgentInfo) bool { return a.Name == to }); i >= 0 {
-		return roster[i].Version
+	if a := rosterAgent(roster, to); a != nil {
+		return a.Version
 	}
 	return ""
 }

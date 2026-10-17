@@ -18,7 +18,7 @@ import (
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
 	"github.com/mvanhorn/agent-tincan/internal/history"
 	"github.com/mvanhorn/agent-tincan/internal/onboard"
-	"github.com/mvanhorn/agent-tincan/internal/pass"
+	"github.com/mvanhorn/agent-tincan/internal/relay"
 	"github.com/mvanhorn/agent-tincan/internal/wake"
 )
 
@@ -926,9 +926,9 @@ func heldCmd() *cobra.Command {
 			// predates them.
 			var reqs []struct {
 				envelope.Request
-				ToKind    string        `json:"to_kind"`
-				Pass      *pass.Request `json:"pass"`
-				PassError string        `json:"pass_error"`
+				ToKind    string         `json:"to_kind"`
+				Pass      *relay.PassRef `json:"pass"`
+				PassError string         `json:"pass_error"`
 			}
 			if err := r.Raw(cmd.Context(), "GET", "/v1/admin/held", nil, &reqs); err != nil {
 				return err
@@ -941,7 +941,7 @@ func heldCmd() *cobra.Command {
 				cmd.Printf("%s  %s -> %s  chain=%s  %s\n", req.ID, req.From, to, strings.Join(req.Chain, " -> "), req.Body)
 				switch {
 				case req.Pass != nil:
-					cmd.Printf("  pass: %s conversation %s -> %s\n", history.SourceLabel(req.Pass.Source), req.Pass.ID, req.Pass.To)
+					cmd.Printf("  pass: %s conversation %s -> %s\n", history.SourceLabel(history.Source(req.Pass.Source)), req.Pass.ConversationID, req.Pass.To)
 				case req.PassError != "":
 					cmd.Printf("  pass: will fail: %s\n", req.PassError)
 				}

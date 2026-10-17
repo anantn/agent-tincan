@@ -69,7 +69,13 @@ func recordWebUsed(path, id string, now time.Time) error {
 			delete(u.Conversations, k)
 		}
 	}
-	b, err := json.MarshalIndent(u, "", "  ")
+	return writeList(path, u)
+}
+
+// writeList writes list to path as indented JSON (0600 in a 0700
+// directory).
+func writeList(path string, list any) error {
+	b, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
 		return err
 	}

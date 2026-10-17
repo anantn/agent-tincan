@@ -13,10 +13,6 @@ import (
 	"github.com/mvanhorn/agent-tincan/internal/textfit"
 )
 
-// newChat is the seed's first line, so the destination's web agent opens
-// a fresh conversation.
-const newChat = "new chat"
-
 // recentTurns is how many of the newest turns the seed carries verbatim;
 // each earlier turn is summarized as its prompt's first line.
 const recentTurns = 6
@@ -26,8 +22,7 @@ const summaryRunes = 160
 
 // siteBudgets lowers a destination site's seed below
 // history.MaxSendMessage. claude.ai may turn a long paste into an
-// attachment, so it gets a conservative budget until its safe paste size
-// is measured.
+// attachment, so it gets a conservative budget.
 var siteBudgets = map[history.Source]int{
 	history.SourceClaudeAI: 12 << 10,
 }
@@ -77,7 +72,7 @@ func Pack(c history.Conversation, budget int) (string, error) {
 	title := firstLine(c.Title)
 	build := func(kept []string, olderTexts, newestTexts []string) string {
 		var b strings.Builder
-		b.WriteString(newChat + "\n" + fmt.Sprintf(framing, nonce) + "\n\n<<<CHAT " + nonce + ">>>\nTitle: " + title)
+		b.WriteString(history.NewChat + "\n" + fmt.Sprintf(framing, nonce) + "\n\n<<<CHAT " + nonce + ">>>\nTitle: " + title)
 		if len(lines) > 0 {
 			b.WriteString("\n\nEarlier prompts, first line only, oldest first:")
 			if left := len(lines) - len(kept); left > 0 {
@@ -158,11 +153,7 @@ func turns(msgs []history.Message) [][]history.Message {
 func firstLine(s string) string {
 	s = strings.TrimSpace(s)
 	s, _, _ = strings.Cut(s, "\n")
-	s = strings.TrimSpace(s)
-	if r := []rune(s); len(r) > summaryRunes {
-		return string(r[:summaryRunes]) + "…"
-	}
-	return s
+	return capRunes(strings.TrimSpace(s), summaryRunes)
 }
 
 // mentions reports whether nonce appears anywhere in c's text.

@@ -345,8 +345,8 @@ func TestLiveReadRateLimitFailsFast(t *testing.T) {
 	if !errors.Is(err, ErrRateLimited) || calls[SourceChatGPT] != 1 {
 		t.Fatalf("during the cooldown: %v after %d calls", err, calls[SourceChatGPT])
 	}
-	if got := readFailure(Query{Source: SourceChatGPT}, err); got != "Sorry, ChatGPT is rate-limiting this account right now; try again later." {
-		t.Fatalf("readFailure = %q", got)
+	if got := ReadFailure(Query{Source: SourceChatGPT}, err); got != "Sorry, ChatGPT is rate-limiting this account right now; try again later." {
+		t.Fatalf("ReadFailure = %q", got)
 	}
 	if _, err := convsOf(NewClaudeAI(c).List(context.Background(), 5, Options{})); !errors.Is(err, ErrRateLimited) || calls[SourceClaudeAI] != 1 {
 		t.Fatalf("claude.ai held back by ChatGPT's cooldown: %v %d", err, calls[SourceClaudeAI])

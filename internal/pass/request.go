@@ -101,9 +101,14 @@ func chatRef(from string) (history.Source, string, error) {
 	return src, id, nil
 }
 
+// capRunes cuts s to n runes, marking a cut with "…".
 func capRunes(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n]) + "…"
+	i := 0
+	for j := range s {
+		if i == n {
+			return s[:j] + "…"
+		}
+		i++
 	}
 	return s
 }

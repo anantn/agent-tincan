@@ -23,13 +23,7 @@ func NewGroup() string { return envelope.PassGroupPrefix + rand.Text() }
 // the six web chat kinds, signed in to its site, and not out of messages.
 // It returns the agent's site, whose message cap sets the seed's budget.
 func Destination(roster []client.AgentInfo, to string, now time.Time) (history.Source, error) {
-	var a *client.AgentInfo
-	for i := range roster {
-		if roster[i].Name == to {
-			a = &roster[i]
-			break
-		}
-	}
+	a := rosterAgent(roster, to)
 	switch {
 	case a == nil:
 		return "", fmt.Errorf("no agent named %s on the roster", to)
@@ -48,10 +42,32 @@ func Destination(roster []client.AgentInfo, to string, now time.Time) (history.S
 		}
 		return "", fmt.Errorf("%s is out of messages%s; pass to another web chat teammate or try again then", to, until)
 	}
-	if src := siteOf(roster, to); src != "" {
+	if src := agentSite(a); src != "" {
 		return src, nil
 	}
 	return "", fmt.Errorf("%s's kind %s has no site", to, a.Kind)
+}
+
+// rosterAgent is the roster agent named name, nil when there is none.
+func rosterAgent(roster []client.AgentInfo, name string) *client.AgentInfo {
+	if i := slices.IndexFunc(roster, func(a client.AgentInfo) bool { return a.Name == name }); i >= 0 {
+		return &roster[i]
+	}
+	return nil
+}
+
+// agentSite is the site of the web chat agent a, "" when a is nil or not
+// one.
+func agentSite(a *client.AgentInfo) history.Source {
+	if a == nil {
+		return ""
+	}
+	for _, src := range history.WebSites {
+		if history.WebAgentName(src) == a.Kind {
+			return src
+		}
+	}
+	return ""
 }
 
 // Read reads the conversation id from r whole, or with id "" the newest

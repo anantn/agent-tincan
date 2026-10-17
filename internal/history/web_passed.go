@@ -66,14 +66,7 @@ func recordPassed(path, id string, now time.Time) error {
 		return err
 	}
 	convs[id] = now.UTC()
-	b, err := json.MarshalIndent(webPassed{Conversations: convs}, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	return writeFileAtomic(path, append(b, '\n'), 0o600)
+	return writeList(path, webPassed{Conversations: convs})
 }
 
 // refuseContinuation says why a conversation: request for id must not be

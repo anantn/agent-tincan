@@ -220,7 +220,7 @@ func TestGrokCLINoHistory(t *testing.T) {
 		if !errors.Is(err, ErrNoHistory) || !strings.Contains(err.Error(), want) {
 			t.Fatalf("err = %v, want %q", err, want)
 		}
-		if got := readFailure(Query{Source: SourceGrokCLI}, err); got != "No Grok CLI history was found on this machine." {
+		if got := ReadFailure(Query{Source: SourceGrokCLI}, err); got != "No Grok CLI history was found on this machine." {
 			t.Fatalf("reply = %q", got)
 		}
 	}
