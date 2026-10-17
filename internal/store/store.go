@@ -236,6 +236,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate failover: %w", err)
 	}
+	if err := s.migratePush(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate push subscriptions: %w", err)
+	}
 	for {
 		more, err := s.backfillSearchBatch()
 		if err != nil {
