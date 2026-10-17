@@ -51,7 +51,7 @@ var errSocketFailing = errors.New("session socket keeps failing")
 //     row, and nil when ctx ends.
 //
 // Pings are answered as pushWaiting answers them.
-func pushSocket(ctx context.Context, r *client.Relay, t socketTarget, shared socketShared) error {
+func pushSocket(ctx context.Context, r *client.Relay, t socketTarget, shared socketShared, own map[string]bool) error {
 	select {
 	case <-ctx.Done():
 		return nil
@@ -62,7 +62,6 @@ func pushSocket(ctx context.Context, r *client.Relay, t socketTarget, shared soc
 	// so the advert stops with it.
 	r.AdvertiseSocketWake(true)
 	defer r.AdvertiseSocketWake(false)
-	own := map[string]bool{} // own reply keys already pushed and still waiting
 	var retries client.PongRetries
 	defer retries.Wait()
 	backoff, fails := time.Second, 0
@@ -95,11 +94,20 @@ func pushSocket(ctx context.Context, r *client.Relay, t socketTarget, shared soc
 			}
 			return fails >= socketFailLimit
 		}
+		mine, rest := splitOwn(r, w)
 		if t.idle() {
-			mine, rest := splitOwn(r, w)
-			if settle(pushOwn(ctx, t, mine, own)) || settle(pushShared(ctx, t, rest, shared)) {
+			wrote, err := pushOwn(ctx, t, mine, own)
+			if settle(wrote, err) {
 				return errSocketFailing
 			}
+			// A message just started a turn, so the session is no longer
+			// idle; shared items wait for the next recheck and its own idle
+			// check rather than landing in a busy session.
+			if !wrote && settle(pushShared(ctx, t, rest, shared)) {
+				return errSocketFailing
+			}
+		} else {
+			forgetOwn(mine, own)
 		}
 		if w.Total > 0 {
 			sleepCtx(ctx, waitingRecheck)
@@ -123,22 +131,48 @@ func splitOwn(r *client.Relay, w client.Waiting) (mine []client.Result, rest cli
 	return mine, rest
 }
 
-// pushOwn pushes one notice for this session's own replies not pushed yet,
-// and forgets keys no longer waiting. It reports whether it wrote.
-func pushOwn(ctx context.Context, t socketTarget, mine []client.Result, own map[string]bool) (bool, error) {
-	still := map[string]bool{}
-	var fresh []client.Result
+// pendingKey and replyKey name one delivery of an item. A request that is
+// queued again (a clarification answered, or a lease that ran out) is the
+// same request, and an answer it gets again is a new reply generation, so
+// each needs its own turn: the request key is forgotten once the request
+// leaves the queue, and the reply key carries its generation.
+func pendingKey(id string) string { return "q:" + id }
+
+func replyKey(rep client.Result) string {
+	gen := int64(0)
+	if rep.Reply != nil {
+		gen = rep.Reply.Generation
+	}
+	return fmt.Sprintf("r:%s#%d", rep.Request.ID, gen)
+}
+
+// countKey names a queue count from a relay that predates pending lists.
+func countKey(n int) string { return fmt.Sprintf("q#%d", n) }
+
+// forgetOwn drops own reply keys no longer waiting.
+func forgetOwn(mine []client.Result, own map[string]bool) {
+	listed := map[string]bool{}
 	for _, rep := range mine {
-		k := "r:" + rep.Request.ID
-		if own[k] {
-			still[k] = true
-		} else {
-			fresh = append(fresh, rep)
+		listed[replyKey(rep)] = true
+	}
+	for k := range own {
+		if !listed[k] {
+			delete(own, k)
 		}
 	}
-	clear(own)
-	for k := range still {
-		own[k] = true
+}
+
+// pushOwn pushes one notice for this session's own replies not pushed yet,
+// and forgets keys no longer waiting. It reports whether it wrote. own
+// outlives one pushSocket run, so a recovered socket does not announce a
+// reply it already delivered.
+func pushOwn(ctx context.Context, t socketTarget, mine []client.Result, own map[string]bool) (bool, error) {
+	forgetOwn(mine, own)
+	var fresh []client.Result
+	for _, rep := range mine {
+		if !own[replyKey(rep)] {
+			fresh = append(fresh, rep)
+		}
 	}
 	if len(fresh) == 0 {
 		return false, nil
@@ -147,8 +181,8 @@ func pushOwn(ctx context.Context, t socketTarget, mine []client.Result, own map[
 	if err := t.Push(ctx, n.content, n.meta); err != nil {
 		return true, err
 	}
-	for _, k := range n.keys {
-		own[k] = true
+	for _, rep := range fresh {
+		own[replyKey(rep)] = true
 	}
 	return true, nil
 }
@@ -156,12 +190,10 @@ func pushOwn(ctx context.Context, t socketTarget, mine []client.Result, own map[
 // pushShared pushes one notice for the items no window on this machine has
 // delivered yet. It takes the shared lock only for this one decision, so a
 // busy window never holds up an idle one. When another window holds the
-// lock it writes nothing and the next recheck tries again.
+// lock it writes nothing and the next recheck tries again. A delivery the
+// record could not save counts as a failed write: the next peek would send
+// it again, so repeated save failures end socket wake like a failing socket.
 func pushShared(ctx context.Context, t socketTarget, w client.Waiting, shared socketShared) (bool, error) {
-	keys := waitingKeys(w)
-	if len(keys) == 0 {
-		return false, nil
-	}
 	release, ok, err := shared.tryLock()
 	if err != nil {
 		log.Printf("tincan socket wake: lock: %v", err)
@@ -173,78 +205,89 @@ func pushShared(ctx context.Context, t socketTarget, w client.Waiting, shared so
 	defer release()
 	now := time.Now()
 	rec := shared.read()
+	legacy := len(w.Pending) == 0 && w.Queued > 0
 	listed := map[string]bool{}
-	for _, k := range keys {
-		listed[k] = true
+	for _, p := range w.Pending {
+		listed[pendingKey(p.ID)] = true
 	}
+	if legacy {
+		listed[countKey(w.Queued)] = true
+	}
+	for _, rep := range w.Replies {
+		listed[replyKey(rep)] = true
+	}
+	// The pending list is complete when it holds every queued request, so a
+	// request key it leaves out has left the queue.
+	completeQueue := !legacy && len(w.Pending) >= w.Queued
 	changed := false
 	for k, at := range rec {
-		// A count key ("q#N", from a relay that gives only a count) names
-		// no request, so a new request can bring back a count already
-		// announced. Drop it once the count changes, and do not keep it
-		// past socketRecordKeep even while it is listed.
-		count := strings.HasPrefix(k, "q#")
-		if (count && !listed[k]) || ((count || !listed[k]) && now.Sub(at) >= socketRecordKeep) {
+		switch {
+		case listed[k] && strings.HasPrefix(k, "q#"):
+			// A count key names no request, so a new request can bring back
+			// a count already announced. Do not keep it past socketRecordKeep.
+			if now.Sub(at) >= socketRecordKeep {
+				delete(rec, k)
+				changed = true
+			}
+		case listed[k]:
+			// Still waiting: keep it fresh, so one capped or differently
+			// scoped peek that leaves it out does not make it look new.
+			if now.Sub(at) >= socketRecordKeep/2 {
+				rec[k] = now
+				changed = true
+			}
+		case strings.HasPrefix(k, "q#") || (completeQueue && strings.HasPrefix(k, "q:")) || now.Sub(at) >= socketRecordKeep:
 			delete(rec, k)
 			changed = true
 		}
 	}
-	save := func() {
-		if changed {
-			shared.write(rec)
+	var fresh client.Waiting
+	var keys []string
+	for _, p := range w.Pending {
+		if _, done := rec[pendingKey(p.ID)]; !done {
+			fresh.Pending = append(fresh.Pending, p)
+			keys = append(keys, pendingKey(p.ID))
 		}
 	}
-	fresh := w
-	fresh.Pending, fresh.Replies = nil, nil
-	for _, p := range w.Pending {
-		if _, done := rec["q:"+p.ID]; !done {
-			fresh.Pending = append(fresh.Pending, p)
+	fresh.Queued = len(fresh.Pending)
+	if legacy {
+		if _, done := rec[countKey(w.Queued)]; !done {
+			fresh.Queued = w.Queued
+			keys = append(keys, countKey(w.Queued))
 		}
 	}
 	for _, rep := range w.Replies {
-		if _, done := rec["r:"+rep.Request.ID]; !done {
+		if _, done := rec[replyKey(rep)]; !done {
 			fresh.Replies = append(fresh.Replies, rep)
+			keys = append(keys, replyKey(rep))
 		}
 	}
-	if len(w.Pending) == 0 && w.Queued > 0 {
-		// A relay that predates pending gives only a count.
-		if _, done := rec[fmt.Sprintf("q#%d", w.Queued)]; done {
-			fresh.Queued = 0
-		}
-	} else {
-		fresh.Queued = len(fresh.Pending)
-	}
+	fresh.Urgent = w.Urgent
 	fresh.Total = fresh.Queued + len(fresh.Replies)
 	if fresh.Total == 0 {
-		save()
+		if changed {
+			if err := shared.write(rec); err != nil {
+				log.Printf("tincan socket wake: record: %v", err)
+			}
+		}
 		return false, nil
 	}
 	n := socketNotice(fresh)
 	if err := t.Push(ctx, n.content, n.meta); err != nil {
-		save()
+		if changed {
+			if err := shared.write(rec); err != nil {
+				log.Printf("tincan socket wake: record: %v", err)
+			}
+		}
 		return true, err
 	}
-	for _, k := range n.keys {
+	for _, k := range keys {
 		rec[k] = now
 	}
-	changed = true
-	save()
+	if err := shared.write(rec); err != nil {
+		return true, fmt.Errorf("delivered, but the record was not saved: %w", err)
+	}
 	return true, nil
-}
-
-// waitingKeys are the item keys a peek lists, as announcer keys them.
-func waitingKeys(w client.Waiting) []string {
-	var keys []string
-	for _, p := range w.Pending {
-		keys = append(keys, "q:"+p.ID)
-	}
-	if len(w.Pending) == 0 && w.Queued > 0 {
-		keys = append(keys, fmt.Sprintf("q#%d", w.Queued))
-	}
-	for _, rep := range w.Replies {
-		keys = append(keys, "r:"+rep.Request.ID)
-	}
-	return keys
 }
 
 // socketNotice is the notice for every item in w, built the way a channel
@@ -257,7 +300,7 @@ func socketNotice(w client.Waiting) notice {
 
 // socketShared is the record the agent's windows on this machine share, so
 // that one item is delivered once: dir/<agent>.json maps item keys to when
-// they were delivered, guarded by dir/<agent>.lock.
+// they were delivered or last seen waiting, guarded by dir/<agent>.lock.
 type socketShared struct {
 	dir, agent string
 }
@@ -275,16 +318,16 @@ func (s socketShared) read() map[string]time.Time {
 }
 
 // write replaces the record. The caller holds the lock.
-func (s socketShared) write(rec map[string]time.Time) {
-	b, _ := json.Marshal(rec)
+func (s socketShared) write(rec map[string]time.Time) error {
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
 	tmp := s.path() + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		log.Printf("tincan socket wake: record: %v", err)
-		return
+		return err
 	}
-	if err := os.Rename(tmp, s.path()); err != nil {
-		log.Printf("tincan socket wake: record: %v", err)
-	}
+	return os.Rename(tmp, s.path())
 }
 
 // socketWakeTiming is how socketWake keeps a session live while the socket
@@ -298,9 +341,10 @@ type socketWakeTiming struct {
 // look online, and after timing.retry asks reverify for a fresh pusher; it
 // resumes pushing once one checks out.
 func socketWake(ctx context.Context, r *client.Relay, t socketTarget, shared socketShared, timing socketWakeTiming, reverify func() (socketTarget, error)) {
+	own := map[string]bool{} // own reply keys already delivered, kept across retries
 	for ctx.Err() == nil {
 		if t != nil {
-			if err := pushSocket(ctx, r, t, shared); err == nil {
+			if err := pushSocket(ctx, r, t, shared, own); err == nil {
 				return
 			}
 			log.Printf("tincan socket wake: %v; keeping the session live and trying again in %s", errSocketFailing, timing.retry)

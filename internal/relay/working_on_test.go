@@ -105,3 +105,18 @@ func TestWorkingOnOnAdminHandler(t *testing.T) {
 		t.Fatalf("admin handler has no working-on route: %d", rec.Code)
 	}
 }
+
+// Removing an agent forgets its sessions' working-on lines and socket-wake
+// records, so an agent joined again under the same name does not show the
+// old agent's title or wake path.
+func TestRemoveForgetsWorkingOnAndSocketWake(t *testing.T) {
+	h, _, _ := wakeHarness(t)
+	workingOn(h, museAddr, "s1", "PUT", `{"text":"Fix flaky relay test"}`, http.StatusNoContent)
+	peekAs(h, museAddr, "s1", "ping,socket-wake")
+	h.do(macAddr, "POST", "/v1/admin/remove", `{"name":"muse"}`, http.StatusOK, nil)
+	h.srv.mu.Lock()
+	defer h.srv.mu.Unlock()
+	if len(h.srv.workingOn["muse"]) != 0 || len(h.srv.socketWake["muse"]) != 0 {
+		t.Fatalf("after remove: working-on %v, socket wake %v", h.srv.workingOn["muse"], h.srv.socketWake["muse"])
+	}
+}

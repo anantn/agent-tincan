@@ -1690,6 +1690,8 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 	delete(s.storedVersion, in.Name)
 	delete(s.versionWritten, in.Name)
 	delete(s.sessions, in.Name)
+	delete(s.socketWake, in.Name)
+	delete(s.workingOn, in.Name)
 	s.mu.Unlock()
 	s.record(r.Context(), "removed", "", "", in.Name, store.DetailJSON(map[string]any{"cancelled": len(ids)}))
 	writeJSON(w, http.StatusOK, map[string]any{"removed": in.Name, "cancelled": len(ids)})

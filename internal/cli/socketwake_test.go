@@ -46,7 +46,7 @@ func (w *fakeWindow) count() int { return len(w.pushes()) }
 func startSocket(t *testing.T, r *client.Relay, w socketTarget, shared socketShared) context.CancelFunc {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { defer close(done); pushSocket(ctx, r, w, shared) }()
+	go func() { defer close(done); pushSocket(ctx, r, w, shared, map[string]bool{}) }()
 	t.Cleanup(func() { cancel(); <-done })
 	return cancel
 }
@@ -435,5 +435,128 @@ func TestSocketWakeResumesAfterReverify(t *testing.T) {
 	}
 	if _, ok := features.Load("ping," + client.SocketWakeFeature); !ok {
 		t.Fatal("resumed peeks did not advertise socket wake")
+	}
+}
+
+// A request queued again after a clarification is answered is the same
+// request, but it is new work: it gets its own turn once it has left the
+// queue in between.
+func TestSocketWakeAnnouncesRequeuedRequest(t *testing.T) {
+	fastChannel(t, 20*time.Millisecond, time.Hour)
+	m := testrelay.New(t, relay.Config{PollHold: time.Second})
+	shared := socketShared{dir: t.TempDir(), agent: "muse"}
+	w := newFakeWindow()
+	muse := museWindow(t, m, "mcp-a")
+	startSocket(t, muse, w, shared)
+	grok := m.Client(t, "grokbot")
+	req, _ := grok.Send(t.Context(), "muse", "book dinner", envelope.KindAsk, "", false)
+	if got := waitPushes(t, w.recordPusher, 1); len(got) != 1 {
+		t.Fatalf("first pushes = %v", got)
+	}
+	if _, err := muse.Claim(t.Context(), req.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := muse.Reply(t.Context(), req.ID, "which restaurant?", envelope.StatusNeedsInput); err != nil {
+		t.Fatal(err)
+	}
+	// A real answer comes after a person reads the question, well past one
+	// poll hold, so a peek sees the request out of the queue first.
+	time.Sleep(1500 * time.Millisecond)
+	if _, err := grok.Answer(t.Context(), req.ID, "Nopa, 2 people"); err != nil {
+		t.Fatal(err)
+	}
+	got := waitPushes(t, w.recordPusher, 2)
+	if len(got) != 2 || got[1]["request_ids"] != req.ID {
+		t.Fatalf("pushes after the answer = %v, want the request announced again", got)
+	}
+}
+
+// Each answer to an ask is its own reply generation and gets its own turn.
+func TestSocketWakeAnnouncesNewReplyGeneration(t *testing.T) {
+	fastChannel(t, 20*time.Millisecond, time.Hour)
+	m := testrelay.New(t, relay.Config{PollHold: time.Second})
+	w := newFakeWindow()
+	muse := museWindow(t, m, "mcp-a")
+	startSocket(t, muse, w, socketShared{dir: t.TempDir(), agent: "muse"})
+	res, err := muse.Ask(t.Context(), "grokbot", "book dinner", "", 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grok := m.Client(t, "grokbot")
+	if _, err := grok.Claim(t.Context(), res.Request.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := grok.Reply(t.Context(), res.Request.ID, "which restaurant?", envelope.StatusNeedsInput); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitPushes(t, w.recordPusher, 1); len(got) != 1 {
+		t.Fatalf("pushes after the question = %v", got)
+	}
+	if _, err := muse.Answer(t.Context(), res.Request.ID, "Nopa"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := grok.Claim(t.Context(), res.Request.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := grok.Reply(t.Context(), res.Request.ID, "booked for 7", envelope.StatusAnswered); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitPushes(t, w.recordPusher, 2); len(got) != 2 {
+		t.Fatalf("pushes after the final answer = %v, want a second turn", got)
+	}
+}
+
+// A delivery the record cannot save would be sent again on the next peek,
+// so it counts as a failed write and ends socket wake after the limit.
+func TestSocketWakeUnsavedRecordCountsAsFailure(t *testing.T) {
+	fastChannel(t, 10*time.Millisecond, time.Hour)
+	m := testrelay.New(t, relay.Config{PollHold: time.Second})
+	dir := t.TempDir()
+	shared := socketShared{dir: filepath.Join(dir, "rec"), agent: "muse"}
+	release, ok, err := shared.tryLock()
+	if err != nil || !ok {
+		t.Fatalf("lock: %v %v", ok, err)
+	}
+	release()
+	if err := os.Chmod(shared.dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(shared.dir, 0o700) })
+	m.Client(t, "grokbot").Send(t.Context(), "muse", "call the dentist", envelope.KindAsk, "", false)
+	w := newFakeWindow()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := pushSocket(ctx, museWindow(t, m, "mcp-a"), w, shared, map[string]bool{}); !errors.Is(err, errSocketFailing) {
+		t.Fatalf("pushSocket = %v, want it to give up on an unsavable record", err)
+	}
+	if n := w.count(); n != socketFailLimit {
+		t.Fatalf("pushes = %d, want %d before giving up", n, socketFailLimit)
+	}
+}
+
+// The own-reply record outlives one pushSocket run, so a socket that
+// recovers does not announce a reply it already delivered.
+func TestSocketWakeOwnReplySurvivesRestart(t *testing.T) {
+	fastChannel(t, 20*time.Millisecond, time.Hour)
+	m := testrelay.New(t, relay.Config{PollHold: time.Second})
+	muse := museWindow(t, m, "mcp-a")
+	res, _ := muse.Ask(t.Context(), "grokbot", "is the build green?", "", 0, false)
+	grok := m.Client(t, "grokbot")
+	grok.Claim(t.Context(), res.Request.ID)
+	grok.Reply(t.Context(), res.Request.ID, "green", envelope.StatusAnswered)
+	own := map[string]bool{}
+	shared := socketShared{dir: t.TempDir(), agent: "muse"}
+	run := func() int {
+		w := newFakeWindow()
+		ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+		defer cancel()
+		pushSocket(ctx, muse, w, shared, own)
+		return w.count()
+	}
+	if n := run(); n != 1 {
+		t.Fatalf("first run pushes = %d, want 1", n)
+	}
+	if n := run(); n != 0 {
+		t.Fatalf("restarted run pushes = %d, want 0", n)
 	}
 }
