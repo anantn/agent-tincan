@@ -149,12 +149,44 @@ func TestSentWithLimitTextHoldsNextRequest(t *testing.T) {
 	if got := rig.agent.Native.CooldownRemaining(SourceClaudeAI); got != 0 {
 		t.Fatalf("cooldown before = %v", got)
 	}
-	rig.agent.observeSent(SendResult{Notice: claudeNoResetFixture})
+	rig.agent.observeSent(SendResult{Notice: claudeNoResetFixture})()
 	if got := rig.agent.auth.latest; got.State != envelope.WebLimited {
 		t.Fatalf("status = %+v", got)
 	}
 	if left := rig.agent.Native.CooldownRemaining(SourceClaudeAI); left != DefaultLimitWait {
 		t.Fatalf("cooldown = %v", left)
+	}
+}
+
+// The reset time is read when the send returns, not when its reply has
+// been read: a limit that resets while the reply is still coming is not
+// pushed to the same time tomorrow, and one still running keeps its time.
+func TestSentLimitReadsResetAtSend(t *testing.T) {
+	rig, clk := limitRig(t)
+	rig.agent.Site = SourceClaudeAI
+	reset := clk.Now().Add(time.Minute)
+	notice := "5-hour limit reached - resets " + reset.Format("3:04 PM")
+
+	note := rig.agent.observeSent(SendResult{Notice: notice})
+	if err := clk.Sleep(t.Context(), 2*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	note()
+	if left := rig.agent.Native.CooldownRemaining(SourceClaudeAI); left != 0 {
+		t.Fatalf("cooldown after the reset passed = %v", left)
+	}
+	if got := rig.agent.Native.cooldown().LimitedUntil(SourceClaudeAI); !got.IsZero() {
+		t.Fatalf("limited until %v after the reset passed", got)
+	}
+
+	reset = clk.Now().Add(10 * time.Minute)
+	note = rig.agent.observeSent(SendResult{Notice: "5-hour limit reached - resets " + reset.Format("3:04 PM")})
+	if err := clk.Sleep(t.Context(), 2*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	note()
+	if got := rig.agent.Native.cooldown().LimitedUntil(SourceClaudeAI); !got.Equal(reset) {
+		t.Fatalf("limited until %v, want %v", got, reset)
 	}
 }
 

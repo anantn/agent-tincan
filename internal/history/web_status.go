@@ -99,10 +99,17 @@ func (w *WebAgent) sendLimit(err error) (time.Time, bool) {
 }
 
 // observeSent reads a usage limit from the page after a send that went
-// through, so the next request is held back.
-func (w *WebAgent) observeSent(res SendResult) {
-	if until, ok := detectLimit(w.Site, res.Notice, w.Native.cooldown().now()); ok {
-		w.noteLimit(until)
+// through and returns the call that notes it, so the next request is held
+// back. The reset time is read now, against the time the send returned: a
+// clock time read once the reply is in could already be past and land a
+// day or a week later. A reset that has passed by the time the note is
+// made is not noted.
+func (w *WebAgent) observeSent(res SendResult) (note func()) {
+	until, ok := detectLimit(w.Site, res.Notice, w.Native.cooldown().now())
+	return func() {
+		if ok && until.After(w.Native.cooldown().now()) {
+			w.noteLimit(until)
+		}
 	}
 }
 
