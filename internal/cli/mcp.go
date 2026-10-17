@@ -20,7 +20,7 @@ import (
 )
 
 func mcpCmd() *cobra.Command {
-	var channel, wakeSocket bool
+	var channel, wakeSocket, shareTitle bool
 	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "Run the Agent Tincan MCP server over stdio (add this to your agent's MCP config)",
@@ -42,7 +42,13 @@ through the session's own messaging socket instead: when the session is
 idle it sends one short message with the same count-only notice, which
 starts a turn. Each teammate request starts one turn on the machine,
 however many windows are open, and a reply to an ask goes to the window
-that asked. --wake-socket=false turns this off.`,
+that asked. --wake-socket=false turns this off.
+
+With --share-title, inside a Claude Code session it also shows the
+session's title (its custom title, else the title Claude Code wrote for
+it) as a working_on field on the roster, refreshed every few minutes and
+removed when the server exits. Every joined agent can read it. Off by
+default.`,
 		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			// Record the launch before anything can fail, so tincan doctor
 			// can tell an app that never starts tincan from one that does.
@@ -57,6 +63,10 @@ that asked. --wake-socket=false turns this off.`,
 				// id per process gives each session the replies to its own
 				// asks. One-shot CLI commands name no session and see all.
 				r.SetSession(newSession())
+			}
+			if shareTitle {
+				stop := startTitleSharing(cmd.Context(), newClaudeTitleSharer(r, os.Getenv, os.Getppid()), sessionKeepalive)
+				defer stop()
 			}
 			files := mcpserver.LocalFiles(client.AttachmentDir(cfg))
 			watch := mcpserver.Watch(mcpserver.NewBuildWatch(ownBinary(), Version))
@@ -85,6 +95,7 @@ that asked. --wake-socket=false turns this off.`,
 		},
 	}
 	cmd.Flags().BoolVar(&channel, "channel", false, "announce waiting teammate requests and replies in a running Claude Code session (channels preview)")
+	cmd.Flags().BoolVar(&shareTitle, "share-title", false, "show this Claude Code session's title as its working_on line on the roster, readable by every joined agent")
 	cmd.Flags().BoolVar(&wakeSocket, "wake-socket", true, "without --channel, wake an idle Claude Code session through its own messaging socket")
 	return cmd
 }

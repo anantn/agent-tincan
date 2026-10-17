@@ -59,21 +59,29 @@ func checkKind(kind string) error {
 }
 
 // maxGoodAtRunes caps an agent's good-at line so the roster stays scannable.
+// A session's working-on line shares the cap.
 const maxGoodAtRunes = 120
 
-// checkGoodAt trims line and reports the line to store ("" clears it). A line
-// is one printable line: valid UTF-8, at most maxGoodAtRunes runes, and no
-// control or format characters, newlines and tabs included.
+// checkGoodAt trims line and reports the line to store ("" clears it).
 func checkGoodAt(line string) (string, error) {
+	return CheckRosterLine("the good-at line", line)
+}
+
+// CheckRosterLine trims line and reports the line to store. A line is one
+// printable line: valid UTF-8, at most 120 runes, and no control or format
+// characters, newlines and tabs included, so text another agent reads on the
+// roster cannot break a row in two or hide characters. what names the line in
+// errors, such as "the good-at line".
+func CheckRosterLine(what, line string) (string, error) {
 	line = strings.TrimSpace(line)
 	if !utf8.ValidString(line) {
-		return "", errors.New("the good-at line is not valid UTF-8")
+		return "", fmt.Errorf("%s is not valid UTF-8", what)
 	}
 	if utf8.RuneCountInString(line) > maxGoodAtRunes {
-		return "", fmt.Errorf("the good-at line is over %d characters", maxGoodAtRunes)
+		return "", fmt.Errorf("%s is over %d characters", what, maxGoodAtRunes)
 	}
 	if strings.IndexFunc(line, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) >= 0 {
-		return "", errors.New("the good-at line contains a line break or other control character")
+		return "", fmt.Errorf("%s contains a line break or other control character", what)
 	}
 	return line, nil
 }

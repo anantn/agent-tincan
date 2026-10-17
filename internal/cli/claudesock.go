@@ -95,13 +95,18 @@ func claudeConfigDir(getenv func(string) string) string {
 // session reads the parent session's registry file. It reads the file on
 // every call because the session rewrites it as its status changes.
 func (p *claudeSocketPusher) session() (claudeSessionInfo, error) {
+	return readClaudeSession(p.registry)
+}
+
+// readClaudeSession reads one Claude Code session registry file.
+func readClaudeSession(path string) (claudeSessionInfo, error) {
 	var s claudeSessionInfo
-	b, err := os.ReadFile(p.registry)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return s, fmt.Errorf("claude session registry: %w", err)
 	}
 	if err := json.Unmarshal(b, &s); err != nil {
-		return s, fmt.Errorf("claude session registry %s: %w", p.registry, err)
+		return s, fmt.Errorf("claude session registry %s: %w", path, err)
 	}
 	return s, nil
 }

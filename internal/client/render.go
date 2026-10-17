@@ -231,6 +231,22 @@ func (a AgentInfo) GoodAtField() string {
 	return "good_at=" + strconv.Quote(a.GoodAt)
 }
 
+// WorkingOnField is the agent's working-on line as a roster field,
+// working_on="...", quoted like GoodAtField so a title cannot read as more
+// fields, with the number of the agent's other sharing sessions after it,
+// as in working_on="Fix flaky relay test" (+2). It is empty for an agent
+// that shares no title.
+func (a AgentInfo) WorkingOnField() string {
+	if a.WorkingOn == "" {
+		return ""
+	}
+	field := "working_on=" + strconv.Quote(a.WorkingOn)
+	if a.WorkingOnOthers > 0 {
+		field += fmt.Sprintf(" (+%d)", a.WorkingOnOthers)
+	}
+	return field
+}
+
 // ageAgo renders an age for LastSeen and OverdueNote: "just now", "12m ago", "3h ago",
 // "2d ago".
 func ageAgo(d time.Duration) string {

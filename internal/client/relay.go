@@ -83,6 +83,13 @@ type AgentInfo struct {
 	// shapes, Hermes and OpenClaw until the owner sets one, and from relays
 	// that predate it.
 	GoodAt string `json:"good_at,omitempty"`
+	// WorkingOn is the title of the agent's most recently refreshed session
+	// that shares its title (tincan mcp --share-title), and WorkingOnOthers
+	// how many other sessions of the agent share one. The text is the
+	// session's own description of itself, for reading only. Empty for an
+	// agent that shares none, and from relays that predate it.
+	WorkingOn       string `json:"working_on,omitempty"`
+	WorkingOnOthers int    `json:"working_on_others,omitempty"`
 	// Version is the tincan build the agent last called the relay with,
 	// empty when it has not called since the relay learned to record it,
 	// or runs a client that predates the version header.
