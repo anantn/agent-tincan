@@ -42,6 +42,9 @@ var (
 	// check whether the agent's old node is still online. It is a transient
 	// failure, not a refusal.
 	ErrRebindCheckFailed = errors.New("could not check the agent's old node; try again")
+	// ErrNameTaken means a new-only invite named an agent that is bound to
+	// another machine.
+	ErrNameTaken = errors.New("the name belongs to an agent on another machine")
 )
 
 var nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
@@ -345,6 +348,34 @@ func (d *Directory) InviteKind(ctx context.Context, remoteAddr, name, kind strin
 		return "", err
 	}
 	return code, nil
+}
+
+// InviteNew is InviteKind for a name that must not move an agent: it refuses
+// with ErrNameTaken when name is bound to a machine other than the caller's.
+// The caller's own agent may be invited again. The local admin socket has no
+// machine, so any existing agent refuses it.
+func (d *Directory) InviteNew(ctx context.Context, remoteAddr, name, kind string) (string, error) {
+	if err := d.requireAdmin(ctx, remoteAddr); err != nil {
+		return "", err
+	}
+	a, ok, err := d.store.AgentByName(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	if ok {
+		mine := false
+		if remoteAddr != LocalAdmin {
+			n, err := d.who.WhoIs(ctx, remoteAddr)
+			if err != nil {
+				return "", err
+			}
+			mine = a.NodeID == n.ID
+		}
+		if !mine {
+			return "", fmt.Errorf("%s: %w", name, ErrNameTaken)
+		}
+	}
+	return d.InviteKind(ctx, remoteAddr, name, kind)
 }
 
 // Join binds the node behind remoteAddr to the invite's name. A node that

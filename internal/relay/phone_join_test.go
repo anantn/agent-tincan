@@ -2,6 +2,7 @@ package relay_test
 
 import (
 	"encoding/json"
+	"errors"
 	"maps"
 	"net/http"
 	"strings"
@@ -161,5 +162,47 @@ func TestRecentTracesFromFiltersBeforeLimit(t *testing.T) {
 	}
 	if len(out.Traces) != 1 || out.Traces[0].Request.ID != mine.ID {
 		t.Fatalf("traces from grokbot: %+v", out.Traces)
+	}
+}
+
+// The page mints its invite with new_only, so a name another device's
+// agent holds is refused instead of moved to the phone, whatever the page's
+// cached roster said. A free name and the page's own agent on this device
+// still get a code, and an invite without the flag (the CLI's re-invite)
+// still moves an existing agent.
+func TestPageInviteNewOnly(t *testing.T) {
+	m := testrelay.New(t, relay.Config{})
+	page := hardened(t, m, "admin")
+	invite := func(name string, newOnly bool) (int, string) {
+		t.Helper()
+		in := map[string]any{"name": name, "kind": onboard.KindPhone}
+		if newOnly {
+			in["new_only"] = true
+		}
+		return pageCall(t, page, "POST", "/v1/admin/invite", "", in, nil)
+	}
+
+	if code, body := invite("muse", true); code != http.StatusConflict || !strings.Contains(body, "muse") {
+		t.Fatalf("new_only invite for another device's agent: %d %s, want 409", code, body)
+	}
+	if a, _, err := m.Dir.Agent(t.Context(), "muse"); err != nil || a.NodeID != "nMUSE" {
+		t.Fatalf("muse after the refused invite: %+v %v", a, err)
+	}
+	if code, body := invite("phone", true); code != http.StatusOK {
+		t.Fatalf("new_only invite for a free name: %d %s", code, body)
+	}
+	m.JoinOnMachineOf(t, "admin", "phone")
+	if code, body := invite("phone", true); code != http.StatusOK {
+		t.Fatalf("new_only invite for this device's own agent: %d %s", code, body)
+	}
+	// The local admin socket has no machine of its own to match.
+	if _, err := m.Dir.InviteNew(t.Context(), identity.LocalAdmin, "phone", onboard.KindPhone); !errors.Is(err, identity.ErrNameTaken) {
+		t.Fatalf("new_only invite from the admin socket for an existing agent: %v, want ErrNameTaken", err)
+	}
+	if code, body := invite("muse", false); code != http.StatusOK {
+		t.Fatalf("invite without new_only for an existing agent: %d %s", code, body)
+	}
+	if _, err := m.Client(t, "admin").Invite(t.Context(), "grokbot"); err != nil {
+		t.Fatalf("CLI re-invite: %v", err)
 	}
 }

@@ -1623,6 +1623,9 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name string `json:"name"`
 		Kind string `json:"kind"`
+		// NewOnly refuses a name bound to another machine instead of
+		// minting a code that would move that agent (the phone page).
+		NewOnly bool `json:"new_only"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
@@ -1632,7 +1635,11 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	code, err := s.dir.InviteKind(r.Context(), s.remote(r), in.Name, in.Kind)
+	invite := s.dir.InviteKind
+	if in.NewOnly {
+		invite = s.dir.InviteNew
+	}
+	code, err := invite(r.Context(), s.remote(r), in.Name, in.Kind)
 	if err != nil {
 		writeErr(w, statusFor(err), err)
 		return
@@ -1981,7 +1988,7 @@ func statusFor(err error) int {
 	case errors.Is(err, store.ErrForbidden), errors.Is(err, identity.ErrNotAdmin), errors.Is(err, identity.ErrNotJoined),
 		errors.Is(err, identity.ErrAgentAmbiguous):
 		return http.StatusForbidden
-	case errors.Is(err, store.ErrWrongState):
+	case errors.Is(err, store.ErrWrongState), errors.Is(err, identity.ErrNameTaken):
 		return http.StatusConflict
 	case errors.Is(err, identity.ErrBadInvite):
 		return http.StatusBadRequest

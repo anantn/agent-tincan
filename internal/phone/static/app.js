@@ -397,8 +397,8 @@ function answerBox(entry, question) {
 function renderSent() {
   const list = $("sent-list");
   const entries = [...state.sent.values()].sort(newestFirst).slice(0, SENT_SHOWN);
-  list.replaceChildren();
-  for (const entry of entries) {
+  const shown = new Set();
+  entries.forEach((entry, i) => {
     const res = entry.result;
     if (!entry.li) sentCard(entry);
     entry.route.textContent = "To " + res.request.to;
@@ -415,7 +415,14 @@ function renderSent() {
       entry.answerBox.replaceChildren();
       delete entry.answerBox.dataset.question;
     }
-    list.append(entry.li);
+    // Cards are updated in place and moved only when out of place, so a
+    // focused answer box stays attached and the keyboard stays open.
+    shown.add(entry.li);
+    const at = list.children[i];
+    if (at !== entry.li) list.insertBefore(entry.li, at || null);
+  });
+  for (const li of [...list.children]) {
+    if (!shown.has(li)) li.remove();
   }
   $("sent-empty").hidden = entries.length > 0;
 }
@@ -472,7 +479,11 @@ async function join() {
   }
   $("join-button").disabled = true;
   try {
-    const inv = await api("POST", "/v1/admin/invite", { name, kind: "phone" });
+    // new_only has the relay refuse a name another device's agent holds,
+    // which the roster above may not show yet. The remembered name may
+    // move this phone's own agent back after its node was replaced.
+    const inv = await api("POST", "/v1/admin/invite", { name, kind: "phone", new_only: name !== remembered() });
+    if (inv.status === 409) throw new Error(name + " is already an agent on another device. Pick a different name.");
     if (inv.status !== 200 || !inv.data || !inv.data.code) throw new Error((inv.data && inv.data.error) || "invite failed");
     const joined = await api("POST", "/v1/join", { code: inv.data.code });
     if (joined.status !== 200 || !joined.data) throw new Error((joined.data && joined.data.error) || "join failed");

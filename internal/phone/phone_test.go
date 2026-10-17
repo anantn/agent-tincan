@@ -283,6 +283,35 @@ func TestJoinRefusesAnotherPhone(t *testing.T) {
 	}
 }
 
+// The page's invite asks the relay to refuse a name another device's agent
+// holds (new_only), so a phone that joined since the last roster read is
+// not moved here, and a refusal tells the owner to pick another name.
+func TestJoinChecksTheNameOnTheRelay(t *testing.T) {
+	body := funcBody(t, read(t, "app.js"), "join")
+	if !regexp.MustCompile(`"/v1/admin/invite"[^;]*new_only:`).MatchString(body) {
+		t.Error("join must mint its invite with new_only")
+	}
+	if !strings.Contains(body, "409") || !strings.Contains(body, "Pick a different name") {
+		t.Error("join must explain a 409 from the relay")
+	}
+}
+
+// A refresh updates the sent cards in place and moves only cards that are
+// out of place, so a focused answer box is never detached and keeps the
+// phone's keyboard open.
+func TestSentListKeepsCardsInPlace(t *testing.T) {
+	body := funcBody(t, read(t, "app.js"), "renderSent")
+	if strings.Count(body, "replaceChildren(") > strings.Count(body, "answerBox.replaceChildren(") {
+		t.Error("renderSent must not rebuild the list")
+	}
+	if !strings.Contains(body, "!== entry.li") || !strings.Contains(body, "insertBefore(") {
+		t.Error("renderSent must insert a card only where it is out of place")
+	}
+	if !strings.Contains(body, ".remove()") {
+		t.Error("renderSent must remove cards that leave the list")
+	}
+}
+
 // The sent list asks the relay for this phone's own chains, filtered
 // before the limit, so newer team traffic cannot hide an open ask.
 func TestSentListAsksForItsOwnChains(t *testing.T) {

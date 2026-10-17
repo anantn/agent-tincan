@@ -28,7 +28,7 @@ A `tailscale serve` front is not supported: the relay would see every request co
 
 The Ask tab, beside Team under the held list, lets you ask any teammate from the phone. The phone asks as its own agent, so every ask is attributed to a joined agent like any other.
 
-1. On the Ask tab, tap Join this phone. The name defaults to `phone`. The page mints an invite with kind `phone` and joins with it at once, from the phone itself; there is no code to copy. It refuses a name that already belongs to another agent, or to a phone agent other than this phone's own, since an invite for an existing name would move that agent to this phone.
+1. On the Ask tab, tap Join this phone. The name defaults to `phone`. The page mints an invite with kind `phone` and joins with it at once, from the phone itself; there is no code to copy. It refuses a name that already belongs to another agent, or to a phone agent other than this phone's own, since an invite for an existing name would move that agent to this phone. The relay checks the name again when the page mints the invite (`new_only`), so a phone that joined under it since the page last read the roster is refused too.
 2. Pick a teammate, write the ask and tap Send. Held asks (to council or dot-web, or under `approval.json`) show as held for your approval, and you approve them in the held list like any other.
 3. Your asks shows the 20 most recent, rebuilt from the relay each time the page opens: waiting, working on it (with the latest progress note), held for your approval, needs your input (with a box to answer), answered (with the answer), could not do it, or declined.
 

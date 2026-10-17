@@ -233,14 +233,21 @@ only: `push_subscribed`, `push_unsubscribed`, `push_sent` (`status`, or
 
 Kind `phone` is the owner's phone, joined from the phone page as its own
 agent: the page mints an invite with `POST /v1/admin/invite`
-`{"name":"phone","kind":"phone"}` and redeems it with `POST /v1/join` from
-the same device, then asks through `POST /v1/send` and reads replies through
+`{"name":"phone","kind":"phone","new_only":true}` and redeems it with
+`POST /v1/join` from the same device, then asks through `POST /v1/send` and reads replies through
 `GET /v1/requests/{id}` and answers clarifying questions through
 `POST /v1/requests/{id}/answer`, naming itself with `X-Tincan-Agent` like any
 client on a machine with several agents. Its wake method is `none` and its
 stock good-at line is `the owner's phone; asks only, never answers`. A phone
 agent asks and never answers, so it is never a failover target or a room
 mention target; it may be a room member. The relay adds no route for it.
+
+`new_only` on `POST /v1/admin/invite` makes the relay refuse with 409 when
+the name belongs to an agent bound to another machine, instead of minting a
+code that would move that agent to whoever redeems it. The caller's own agent
+(bound to the calling device) may be invited again, and from the local admin
+socket any existing name is refused. Without `new_only`, as `tincan invite`
+sends it, an invite for an existing name still moves that agent on join.
 
 `GET /phone/` and the files under it are the [phone page](phone.md), served
 to admin devices only (403 otherwise), on the relay's tailnet listeners and,
