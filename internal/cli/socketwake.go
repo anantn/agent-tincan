@@ -42,11 +42,11 @@ var errSocketFailing = errors.New("session socket keeps failing")
 //   - It never pushes the upgrade notice, which reaches the agent on its next
 //     tool call anyway.
 //   - It pushes only while the session is idle.
-//   - Each item is pushed once. A reply to an ask this process sent goes to
-//     this session alone. Everything else (teammate requests, and replies the
-//     relay shows every session of the agent) goes through a lock and record
-//     shared by the agent's windows on this machine, so one item starts one
-//     turn on the machine.
+//   - Each item is pushed once. A reply to an ask this process sent is pushed
+//     by this window first; teammate requests and replies to other asks go to
+//     whichever idle window gets there. All of them go through a lock and
+//     record shared by the agent's windows on this machine, so one item
+//     starts one turn on the machine.
 //   - It returns errSocketFailing after socketFailLimit failed writes in a
 //     row, and nil when ctx ends.
 //
@@ -97,7 +97,7 @@ func pushSocket(ctx context.Context, r *client.Relay, t socketTarget, shared soc
 		}
 		mine, rest := splitOwn(r, w)
 		if t.idle() {
-			wrote, err := pushOwn(ctx, t, mine, own)
+			wrote, err := pushOwn(ctx, t, mine, own, shared)
 			if settle(wrote, err) {
 				return errSocketFailing
 			}
@@ -166,14 +166,40 @@ func forgetOwn(mine []client.Result, own map[string]bool) {
 // pushOwn pushes one notice for this session's own replies not pushed yet,
 // and forgets keys no longer waiting. It reports whether it wrote. own
 // outlives one pushSocket run, so a recovered socket does not announce a
-// reply it already delivered.
-func pushOwn(ctx context.Context, t socketTarget, mine []client.Result, own map[string]bool) (bool, error) {
+// reply it already delivered. It goes through the same lock and record as
+// shared items: a relay that predates per-session replies shows a reply to
+// every window, and the other windows must see that this one delivered it.
+// When another window holds the lock it writes nothing and the next recheck
+// tries again.
+func pushOwn(ctx context.Context, t socketTarget, mine []client.Result, own map[string]bool, shared socketShared) (bool, error) {
 	forgetOwn(mine, own)
-	var fresh []client.Result
+	var pending []client.Result
 	for _, rep := range mine {
 		if !own[replyKey(rep)] {
-			fresh = append(fresh, rep)
+			pending = append(pending, rep)
 		}
+	}
+	if len(pending) == 0 {
+		return false, nil
+	}
+	release, ok, err := shared.tryLock()
+	if err != nil {
+		log.Printf("tincan socket wake: lock: %v", err)
+		return false, nil
+	}
+	if !ok {
+		return false, nil
+	}
+	defer release()
+	rec := shared.read()
+	var fresh []client.Result
+	for _, rep := range pending {
+		if _, done := rec[replyKey(rep)]; done {
+			// Another window already delivered it on this machine.
+			own[replyKey(rep)] = true
+			continue
+		}
+		fresh = append(fresh, rep)
 	}
 	if len(fresh) == 0 {
 		return false, nil
@@ -182,8 +208,13 @@ func pushOwn(ctx context.Context, t socketTarget, mine []client.Result, own map[
 	if err := t.Push(ctx, n.content, n.meta); err != nil {
 		return true, err
 	}
+	now := time.Now()
 	for _, rep := range fresh {
 		own[replyKey(rep)] = true
+		rec[replyKey(rep)] = now
+	}
+	if err := shared.write(rec); err != nil {
+		return true, fmt.Errorf("delivered, but the record was not saved: %w", err)
 	}
 	return true, nil
 }

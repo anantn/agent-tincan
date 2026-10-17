@@ -185,8 +185,11 @@ func TestSocketWakeDeliversOnce(t *testing.T) {
 	}
 }
 
-// A window that loses the lock still tells its own session about a reply
-// to its ask, and does not count the waiting request as delivered.
+// While another window holds the lock nothing is pushed, not even a reply
+// to this window's own ask: an older relay shows that reply to every
+// window, so the record has to say who delivered it. Once the lock frees,
+// the window's own reply goes first, and the request waits for the next
+// recheck rather than landing in a session that just started a turn.
 func TestSocketWakeOwnReplyWithoutLock(t *testing.T) {
 	fastChannel(t, 20*time.Millisecond, 50*time.Millisecond)
 	m := testrelay.New(t, relay.Config{PollHold: time.Second})
@@ -206,15 +209,13 @@ func TestSocketWakeOwnReplyWithoutLock(t *testing.T) {
 	b := newFakeWindow()
 	startSocket(t, rb, b, shared)
 	settle()
-	got := b.pushes()
-	if len(got) != 1 || got[0]["kind"] != "reply" || strings.Contains(got[0]["request_ids"], req.ID) {
-		t.Fatalf("pushes while locked out = %v, want one reply-only notice", got)
+	if got := b.pushes(); len(got) != 0 {
+		t.Fatalf("pushes while locked out = %v, want none", got)
 	}
 	release()
-	settle()
-	got = b.pushes()
-	if len(got) != 2 || got[1]["request_ids"] != req.ID {
-		t.Fatalf("pushes after the lock frees = %v, want the request next", got)
+	got := waitPushes(t, b.recordPusher, 2)
+	if len(got) != 2 || got[0]["kind"] != "reply" || strings.Contains(got[0]["request_ids"], req.ID) || got[1]["request_ids"] != req.ID {
+		t.Fatalf("pushes after the lock frees = %v, want the own reply, then the request", got)
 	}
 }
 
@@ -585,5 +586,43 @@ func TestSocketWakeOlderPeekKeepsNewerDelivery(t *testing.T) {
 	}
 	if _, ok := shared.read()[pendingKey("r1")]; ok {
 		t.Fatal("an empty peek taken after the delivery kept it")
+	}
+}
+
+// A relay that predates per-session replies shows a reply to every window
+// of the agent. The window that asked and the others must not each push it:
+// one reply starts one turn on the machine. (Seen live against an older
+// relay, where both windows woke for one reply.)
+func TestSocketWakeOwnReplyOnceAcrossWindowsOnOlderRelay(t *testing.T) {
+	fastChannel(t, 20*time.Millisecond, time.Hour)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/send":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "q1", "from": "muse", "to": "grokbot", "status": "queued"})
+		case "/v1/poll":
+			_ = json.NewEncoder(w).Encode(map[string]any{"waiting": 1, "queued": 0, "replies": []map[string]any{{
+				"request": map[string]any{"id": "q1", "from": "muse", "to": "grokbot"},
+				"status":  "answered",
+				"reply":   map[string]any{"generation": 1, "from": "grokbot", "status": "answered", "body": "green"},
+			}}})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		}
+	}))
+	defer srv.Close()
+	asker, _ := client.NewRelay(srv.URL, "")
+	asker.SetSession("mcp-a")
+	if _, err := asker.Ask(t.Context(), "grokbot", "is the build green?", "", 0, false); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := client.NewRelay(srv.URL, "")
+	other.SetSession("mcp-b")
+	shared := socketShared{dir: t.TempDir(), agent: "muse"}
+	a, b := newFakeWindow(), newFakeWindow()
+	startSocket(t, asker, a, shared)
+	startSocket(t, other, b, shared)
+	settle()
+	if n := totalPushes(a, b); n != 1 {
+		t.Fatalf("pushes for one reply across windows = %d (asker %d, other %d), want 1", n, a.count(), b.count())
 	}
 }
