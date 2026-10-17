@@ -217,6 +217,10 @@ type Target struct {
 	SignedOutSince      time.Time `json:"signed_out_since,omitzero"`
 	WebStatusObservedAt time.Time `json:"web_status_observed_at,omitzero"`
 	WebHost             string    `json:"web_host,omitempty"`
+	// LimitedUntil is when a web agent's site said its usage limit
+	// resets, set only while that is still ahead. Empty from relays that
+	// predate limits.
+	LimitedUntil time.Time `json:"limited_until,omitzero"`
 	// CheckEverySeconds is how often the recipient checks its inbox.
 	CheckEverySeconds int `json:"check_every_seconds,omitempty"`
 	// ExpectReplySeconds is how long a sender should expect to wait for a
@@ -436,9 +440,16 @@ type SearchResult struct {
 	AttachmentNames []string `json:"attachment_names,omitempty"`
 }
 
-// WebStatus is a fresh, credential-free authentication observation.
+// WebStatus is a fresh, credential-free authentication observation. State
+// is "authenticated", "signed_out" or, to a relay that advertises
+// web_limits, "limited": signed in but out of messages until Until, the
+// site's reset time.
 type WebStatus struct {
 	Site       string    `json:"site"`
 	State      string    `json:"state"`
 	ObservedAt time.Time `json:"observed_at"`
+	Until      time.Time `json:"until,omitzero"`
 }
+
+// WebLimited is the WebStatus state of a site that is out of messages.
+const WebLimited = "limited"

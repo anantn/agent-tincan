@@ -75,6 +75,8 @@ export const READ_GAP_MS = 3000;
 // wait for its message to show in the room feed.
 export const FEED_POLL_MS = 2000;
 export const FEED_WAIT_MS = 60 * 1000;
+// MAX_NOTICE caps the alert and status text a send reports, in characters.
+export const MAX_NOTICE = 500;
 
 // SELECTORS is the one table of page selectors, tried in order. keepDraft
 // means a composer that already holds text is never typed into or
@@ -85,7 +87,11 @@ export const FEED_WAIT_MS = 60 * 1000;
 // they help confirm that the page took the message. None of them is ever
 // used to decide that a reply is finished. dismiss, where a site has it,
 // lists the only buttons a send may click besides send: each is found by
-// its exact text inside one of the within containers (pageDismiss).
+// its exact text inside one of the within containers (pageDismiss). notice
+// lists the page's alert and status regions: a send reports their text as
+// is, and the Go side reads a usage limit from it.
+const NOTICE = Object.freeze(['[role="alert"]', '[role="status"]']);
+
 export const SELECTORS = Object.freeze({
   chatgpt: Object.freeze({
     composer: ['#prompt-textarea', 'div[contenteditable="true"][id="prompt-textarea"]', 'textarea[data-id="root"]', 'form div[contenteditable="true"]'],
@@ -94,6 +100,7 @@ export const SELECTORS = Object.freeze({
     streaming: ['.result-streaming'],
     assistant: ['[data-message-author-role="assistant"]'],
     user: ['[data-message-author-role="user"]'],
+    notice: NOTICE,
     login: ['[data-testid="login-button"]', 'a[href*="/auth/login"]'],
     loginPaths: ['/auth/login', '/log-in'],
   }),
@@ -104,6 +111,7 @@ export const SELECTORS = Object.freeze({
     streaming: ['[data-is-streaming="true"]'],
     assistant: ['[data-is-streaming]', '.font-claude-response', '.font-claude-message', '[data-testid="assistant-message"]'],
     user: ['[data-testid="user-message"]'],
+    notice: NOTICE,
     login: ['a[href="/login"]', 'input[type="email"]'],
     loginPaths: ['/login', '/logout'],
   }),
@@ -118,6 +126,7 @@ export const SELECTORS = Object.freeze({
     streaming: ['[data-streaming="true"]'],
     assistant: ['div[id^="response-"].items-start'],
     user: ['div[id^="response-"].items-end'],
+    notice: NOTICE,
     login: ['a[href^="/sign-in"]', 'a[href*="accounts.x.ai/sign-in"]', 'a[href*="/sign-up"]'],
     loginPaths: ['/sign-in', '/sign-up'],
     blocked: ['#challenge-form', 'iframe[src*="challenges.cloudflare.com"]', '#cf-challenge-running'],
@@ -131,6 +140,7 @@ export const SELECTORS = Object.freeze({
     streaming: [],
     assistant: ['model-response', 'message-content'],
     user: ['user-query'],
+    notice: NOTICE,
     login: ['a[href*="accounts.google.com/ServiceLogin"]', 'a[href*="accounts.google.com/v3/signin"]'],
     loginPaths: [],
   }),
@@ -150,6 +160,7 @@ export const SELECTORS = Object.freeze({
     streaming: [],
     assistant: ['[id^="markdown-content-"]'],
     user: ['[data-testid="user-query"]', 'h1[class*="query"]'],
+    notice: NOTICE,
     login: ['a[href^="/auth/signin"]', 'a[href^="/login"]', 'button[data-testid="login-button"]'],
     loginPaths: ['/auth/signin', '/auth/signup', '/login'],
     blocked: ['#challenge-form', 'iframe[src*="challenges.cloudflare.com"]', '#cf-challenge-running'],
@@ -173,6 +184,7 @@ export const SELECTORS = Object.freeze({
     streaming: [],
     assistant: ['[data-testid="markdown-reply"]'],
     user: ['[data-testid="chatQuestion"]'],
+    notice: NOTICE,
     login: ['a[href*="login.live.com"]', 'a[href*="login.microsoftonline.com"]', 'button[aria-label="Sign in"]'],
     loginPaths: ['/signin', '/login'],
     signedIn: ['#m365-copilot-chats-section', '#mectrl_main_trigger', 'button[aria-label*="Account manager" i]'],
@@ -294,6 +306,20 @@ export function pageProbe(sel) {
   const path = String(location.pathname || '');
   const composer = q(sel.composer);
   const draft = composer ? (composer.tagName === 'TEXTAREA' ? String(composer.value ?? '') : textOf(composer)) : '';
+  // The text of every alert and status region, each once, read only.
+  const notice = [];
+  for (const s of Array.isArray(sel.notice) ? sel.notice : []) {
+    let els = [];
+    try {
+      els = Array.from(document.querySelectorAll(s) || []);
+    } catch {
+      // Skipped, as above.
+    }
+    for (const el of els) {
+      const t = textOf(el).trim();
+      if (t && !notice.includes(t)) notice.push(t);
+    }
+  }
   return {
     href: String(location.href || ''),
     loggedOut: Boolean(q(sel.login)) || sel.loginPaths.some((p) => path === p || path.startsWith(p + '/')),
@@ -306,6 +332,8 @@ export function pageProbe(sel) {
     generating: Boolean(q(sel.stop)) || Boolean(q(sel.streaming)),
     assistantCount: qa(sel.assistant).length,
     userCount: qa(sel.user).length,
+    // MAX_NOTICE, written out: a page function closes over nothing.
+    notice: notice.join('\n').slice(0, 500),
   };
 }
 
@@ -625,6 +653,7 @@ function cleanProbe(r) {
     generating: o.generating === true,
     assistantCount: Number.isSafeInteger(o.assistantCount) ? o.assistantCount : 0,
     userCount: Number.isSafeInteger(o.userCount) ? o.userCount : 0,
+    notice: str(o.notice, MAX_NOTICE),
   };
 }
 
@@ -778,8 +807,8 @@ export function createSender({
   // anti-bot check, and ready(page). A page that shows its login marks is
   // not_logged_in at once; one that never shows the signed-in mark is
   // not_logged_in when loadBy passes; one that is never ready fails with
-  // notReady().
-  async function load(tabId, cfg, sel, { loadBy, late, ready, notReady }) {
+  // notReady(). seen, when given, gets every probe of the page.
+  async function load(tabId, cfg, sel, { loadBy, late, ready, notReady, seen }) {
     const host = new URL(cfg.newURL).host;
     // An anti-bot interstitial can be transient (a challenge that passes
     // by itself and reloads the page), so a blocked page is polled like a
@@ -796,6 +825,7 @@ export function createSender({
       blocked = false;
       if (t.status === 'complete') {
         page = cleanProbe(await inject(tabId, pageProbe, [sel]));
+        if (seen) seen(page);
         blocked = page.blocked;
         if (!blocked && page.loggedOut) throw new OpError('not_logged_in', `logged out of ${host}`);
         if (!blocked && page.signedIn && ready(page)) return page;
@@ -853,6 +883,15 @@ export function createSender({
     // again could post it twice.
     let clicked = false;
     let uploaded = false;
+    // notice is the page's latest alert and status text. The send reports
+    // it as is, on success and on failure, without reading it: the Go
+    // side decides whether it is a usage limit.
+    let notice = '';
+    const probe = async () => {
+      const p = cleanProbe(await inject(tab.id, pageProbe, [sel]));
+      if (p.notice) notice = p.notice;
+      return p;
+    };
     try {
       // 1. Page load, then a composer (or a login page).
       const blockedErr = () => new OpError('blocked', `anti-bot check on ${new URL(cfg.newURL).host}`);
@@ -861,6 +900,9 @@ export function createSender({
         late,
         ready: (p) => p.composer,
         notReady: () => new OpError('composer_not_found', 'no message box on the page'),
+        seen: (p) => {
+          if (p.notice) notice = p.notice;
+        },
       });
       if (existing) {
         const m = cfg.idFrom.exec(page.href);
@@ -905,7 +947,7 @@ export function createSender({
         if (!attached?.ok) throw new OpError('send_failed', attached?.error || 'image upload failed');
         for (;;) {
           await onSite(tab.id, cfg);
-          const p = cleanProbe(await inject(tab.id, pageProbe, [sel]));
+          const p = await probe();
           if (p.loggedOut) throw new OpError('not_logged_in', 'logged out during image upload');
           if (p.blocked) throw blockedErr();
           inputActive();
@@ -937,7 +979,7 @@ export function createSender({
       for (;;) {
         const cur = await urlId();
         if (existing && cur !== pageId) throw new OpError('not_found', 'conversation not found');
-        base = cleanProbe(await inject(tab.id, pageProbe, [sel]));
+        base = await probe();
         if (base.loggedOut) throw new OpError('not_logged_in', 'logged out while sending');
         if (base.blocked) throw blockedErr();
         if (base.generating) throw answering();
@@ -981,7 +1023,7 @@ export function createSender({
           if (typeof messageId === 'string' && messageId !== '') {
             done = true;
             keep(tab.id, site, existing);
-            return { conversation_id: existing, url: cfg.convURL(pageId), submitted_at: submittedAt, message_id: messageId };
+            return { conversation_id: existing, url: cfg.convURL(pageId), submitted_at: submittedAt, message_id: messageId, ...(notice ? { notice } : {}) };
           }
           if (now() >= feedBy) throw new OpError('timeout', 'the message was sent but did not show in the feed in time');
         }
@@ -990,7 +1032,7 @@ export function createSender({
         await sleep(pollMs);
         const cur = await urlId();
         if (!existing && cur) break;
-        const p = cleanProbe(await inject(tab.id, pageProbe, [sel]));
+        const p = await probe();
         if (p.loggedOut) throw new OpError('not_logged_in', 'logged out while sending');
         if (p.blocked) throw blockedErr();
         if (p.userCount > base.userCount || p.generating || p.assistantCount > base.assistantCount) break;
@@ -1021,11 +1063,12 @@ export function createSender({
       }
       done = true;
       keep(tab.id, site, id);
-      return { conversation_id: id, url: cfg.convURL(id), submitted_at: submittedAt, ...(images ? { message_id: messageId, input_count: images.length } : {}) };
+      return { conversation_id: id, url: cfg.convURL(id), submitted_at: submittedAt, ...(images ? { message_id: messageId, input_count: images.length } : {}), ...(notice ? { notice } : {}) };
     } catch (e) {
       if (images && !(e instanceof OpError)) e = new OpError('send_failed', 'image send failed');
       if (clicked && e instanceof OpError) e.clicked = true;
       if (uploaded && e instanceof OpError) e.uploaded = true;
+      if (notice && e instanceof OpError) e.notice = notice;
       throw e;
     } finally {
       owned.delete(tab.id);

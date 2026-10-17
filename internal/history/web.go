@@ -542,6 +542,12 @@ func (w *WebAgent) Handle(ctx context.Context, req envelope.Request) {
 		if !images {
 			w.logf("request %s from %s: send: %v", req.ID, req.From, err)
 		}
+		until, limited := w.sendLimit(err)
+		var ue *UnavailableError
+		if limited && !images && errors.As(err, &ue) && !ue.Clicked {
+			w.reply(ctx, req, w.limitReply(until), envelope.StatusFailed, nil)
+			return
+		}
 		if images {
 			reason := fmt.Sprintf("Nothing was submitted for %s: image transfer failed before sending.", inputNames(req.Attachments))
 			if intent {
@@ -564,6 +570,7 @@ func (w *WebAgent) Handle(ctx context.Context, req envelope.Request) {
 	// closed once the reply is read or the wait gives up, on a context of
 	// its own because ctx may be spent by then.
 	defer w.closeTab(ctx, res.ConversationID)
+	w.observeSent(res)
 	anchor.since = res.Submitted()
 	// A send that confirmed its message in the conversation (dots.send)
 	// names it: the wait binds to that message from the start.
@@ -762,6 +769,22 @@ func sourcesFooter(srcs []webSource) string {
 
 // rateLimitReply is the answer while the site rate-limits the account.
 func (w *WebAgent) rateLimitReply() string { return rateLimitMessage(w.Site) + "." }
+
+// limitReply is the answer to a request not sent because the site is out
+// of messages until until.
+func (w *WebAgent) limitReply(until time.Time) string {
+	return fmt.Sprintf("Nothing was sent: %s is out of messages on this account until %s. Ask again after that, or ask another teammate.", siteLimiter(w.Site), utcClock(until, w.clk().Now()))
+}
+
+// utcClock is t as "16:40 UTC", with the date when it is not now's day:
+// "Oct 2 16:40 UTC". The asker's zone is not known here.
+func utcClock(t, now time.Time) string {
+	t, now = t.UTC(), now.UTC()
+	if t.YearDay() == now.YearDay() && t.Year() == now.Year() {
+		return t.Format("15:04 UTC")
+	}
+	return t.Format("Jan 2 15:04 UTC")
+}
 
 func (w *WebAgent) sendFailure(err error, convID string) string {
 	label := siteLabel(w.Site)

@@ -64,6 +64,56 @@ func TestWebStatusOrderingAndIdentity(t *testing.T) {
 	}
 }
 
+// A limited report keeps its reset time across a reopen (the migration
+// runs again), a newer authenticated report clears it, and Apply shows it
+// only while it is ahead of now.
+func TestWebStatusLimitedUntil(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "relay.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	a := identity.Agent{Name: "web", NodeID: "one", JoinedAt: now}
+	if err := s.PutAgent(t.Context(), a); err != nil {
+		t.Fatal(err)
+	}
+	until := now.Add(time.Hour)
+	if err := s.SetWebStatus(t.Context(), a, envelope.WebStatus{Site: "claude.ai", State: "limited", Until: until, ObservedAt: now}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if s, err = Open(path); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	facts, err := s.WebStatuses(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !facts[a.Name].LimitedUntil.Equal(until) {
+		t.Fatalf("limit lost: %+v", facts[a.Name])
+	}
+	var target envelope.Target
+	facts[a.Name].Apply(a, &target, now)
+	if !target.LimitedUntil.Equal(until) || target.SignedOutSite != "" {
+		t.Fatalf("applied = %+v", target)
+	}
+	target = envelope.Target{}
+	facts[a.Name].Apply(a, &target, until)
+	if !target.LimitedUntil.IsZero() {
+		t.Fatalf("a passed limit applied: %+v", target)
+	}
+	if err := s.SetWebStatus(t.Context(), a, envelope.WebStatus{Site: "claude.ai", State: "authenticated", ObservedAt: now.Add(time.Second)}, now); err != nil {
+		t.Fatal(err)
+	}
+	if facts, err = s.WebStatuses(t.Context()); err != nil || !facts[a.Name].LimitedUntil.IsZero() {
+		t.Fatalf("authenticated kept the limit: %+v %v", facts[a.Name], err)
+	}
+}
+
 func TestWebStatusNoticeDeduplication(t *testing.T) {
 	s, err := Open(":memory:")
 	if err != nil {

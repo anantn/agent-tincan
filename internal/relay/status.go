@@ -43,9 +43,14 @@ type agentStatus struct {
 // agent and nothing is moving, and wins over busy so it is seen; it is
 // never reported before quietUntil, the end of the first lease window
 // after the relay started, since the agent may not have called this relay
-// yet. Busy means a live claim or the host saying so; the rest is idle or
-// offline by whether the agent is polling.
+// yet. A polling web agent whose site is out of messages is limited until
+// the reset, ahead of everything else, since nothing it is sent goes out
+// before then. Busy means a live claim or the host saying so; the rest is
+// idle or offline by whether the agent is polling.
 func computeStatus(f statusFacts, now, quietUntil time.Time) agentStatus {
+	if f.online && f.target.LimitedUntil.After(now) {
+		return agentStatus{status: client.StatusLimited, reason: "until " + utcClock(f.target.LimitedUntil, now)}
+	}
 	if !now.Before(quietUntil) {
 		if reason := stuckReason(f, now); reason != "" {
 			return agentStatus{status: client.StatusStuck, reason: reason}

@@ -211,7 +211,7 @@ func (w *WebAgent) waitReply(ctx context.Context, convID string, a replyAnchor, 
 				if after <= 0 {
 					after = RateLimitBackoffMax
 				}
-				w.Native.cooldown().Note(w.Site, after)
+				w.noteLimit(w.Native.cooldown().now().Add(after))
 				w.logf("conversation %s: %s answered with a rate or plan limit; holding requests back for %s", convID, siteLabel(w.Site), after)
 				return nil, a.bound, &UnavailableError{Source: w.Site, Kind: ErrRateLimited, Detail: "plan limit", RetryAfter: after}
 			}

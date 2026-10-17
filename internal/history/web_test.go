@@ -38,8 +38,11 @@ type fakeBrowser struct {
 	reply func(prompt string) string
 	// image, when set, is generated with every reply.
 	image []byte
-	// sendErr, when set, fails the next sends with this code.
-	sendErr string
+	// sendErr, when set, fails the next sends with this code, carrying
+	// sendRetryAfter and sendNotice (the page's alert text) with it.
+	sendErr        string
+	sendRetryAfter int
+	sendNotice     string
 	// block makes sends wait for the request context to end.
 	block bool
 	// detailErr, when set, fails every detail read after the first
@@ -101,14 +104,14 @@ func (f *fakeBrowser) Exchange(ctx context.Context, req NativeRequest, recv func
 	case OpChatGPTSend, OpClaudeAISend:
 		f.mu.Lock()
 		f.sends = append(f.sends, req.Args)
-		block, code := f.block, f.sendErr
+		block, code, after, notice := f.block, f.sendErr, f.sendRetryAfter, f.sendNotice
 		f.mu.Unlock()
 		if block {
 			<-ctx.Done()
 			return ctx.Err()
 		}
 		if code != "" {
-			_, err := recv(NativeResponse{ID: req.ID, Error: &NativeError{Code: code, Message: "fake " + code}})
+			_, err := recv(NativeResponse{ID: req.ID, Error: &NativeError{Code: code, Message: "fake " + code, RetryAfter: after, Notice: notice}})
 			return err
 		}
 		f.mu.Lock()

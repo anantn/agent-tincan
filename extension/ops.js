@@ -378,6 +378,8 @@ export function errorFrame(e) {
   if (e.retryAfter !== undefined) error.retry_after = e.retryAfter;
   if (e.clicked === true) error.clicked = true;
   if (e.uploaded === true) error.uploaded = true;
+  // notice: a send's page alert and status text, as is (send.js).
+  if (typeof e.notice === 'string' && e.notice !== '') error.notice = e.notice.slice(0, 500);
   return { ok: false, error };
 }
 

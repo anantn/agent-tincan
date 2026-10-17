@@ -47,6 +47,12 @@ func TestComputeStatus(t *testing.T) {
 			agentStatus{status: client.StatusOffline}},
 		{"stale queue", statusFacts{online: true, wake: "wait", stat: store.QueueStat{Queued: 2, OldestQueued: now.Add(-2 * time.Hour)}}, settled,
 			agentStatus{status: client.StatusStuck, reason: "oldest queued 2h"}},
+		{"limited until its reset", statusFacts{online: true, wake: "wait", stat: store.QueueStat{Queued: 1, Lapsed: 1}, target: envelope.Target{LimitedUntil: now.Add(time.Hour)}}, settled,
+			agentStatus{status: client.StatusLimited, reason: "until " + utcClock(now.Add(time.Hour), now)}},
+		{"a passed limit is not limited", statusFacts{online: true, wake: "wait", target: envelope.Target{LimitedUntil: now}}, settled,
+			agentStatus{status: client.StatusIdle}},
+		{"offline beats limited", statusFacts{wake: "command", target: envelope.Target{LimitedUntil: now.Add(time.Hour)}}, settled,
+			agentStatus{status: client.StatusOffline}},
 		{"quiet after a restart", statusFacts{online: true, wake: "wait", stat: store.QueueStat{Queued: 1, Lapsed: 1}}, now.Add(time.Minute),
 			agentStatus{status: client.StatusIdle}},
 	} {

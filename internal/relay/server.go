@@ -752,7 +752,7 @@ func (s *Server) recipientTarget(ctx context.Context, agent string) *envelope.Ta
 				if t == nil {
 					t = &envelope.Target{}
 				}
-				v.Apply(a, t)
+				v.Apply(a, t, s.cfg.Now())
 			}
 		}
 	}
@@ -1545,7 +1545,7 @@ func (s *Server) rosterWith(ctx context.Context, admin, needQueue bool) ([]clien
 				info.Target = s.wakeTarget(wk, polled, now)
 			}
 		}
-		webFacts[a.Name].Apply(a, &info.Target)
+		webFacts[a.Name].Apply(a, &info.Target, now)
 		info.WorkingOn, info.WorkingOnOthers = s.currentWorkingOn(a.Name, now)
 		applyStatus(&info, computeStatus(statusFacts{online: info.Online, wake: info.Wake, stat: stat, target: info.Target, hostBusy: s.hostBusy(a.Name, now)}, now, quietUntil))
 		out = append(out, info)

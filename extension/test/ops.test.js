@@ -184,6 +184,12 @@ test('rate_limited carries retry_after seconds from the Retry-After header', asy
   // Other errors carry no retry_after; unknown errors are internal.
   assert.deepEqual(errorFrame(new OpError('http_error', 'HTTP 502 from /x')), { ok: false, error: { code: 'http_error', message: 'HTTP 502 from /x' } });
   assert.deepEqual(errorFrame(new Error('secret detail')), { ok: false, error: { code: 'internal', message: 'internal error' } });
+  // A send's page notice goes along as is, capped.
+  const e = new OpError('send_failed', 'the send button stayed disabled');
+  e.notice = '5-hour limit reached - resets 2:00 PM';
+  assert.deepEqual(errorFrame(e), { ok: false, error: { code: 'send_failed', message: 'the send button stayed disabled', notice: '5-hour limit reached - resets 2:00 PM' } });
+  e.notice = 'x'.repeat(2000);
+  assert.equal(errorFrame(e).error.notice.length, 500);
 });
 
 function pngBytes(n) {

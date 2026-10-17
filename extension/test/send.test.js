@@ -77,7 +77,7 @@ class FakeSite {
     this.site = site;
     this.sel = SELECTORS[site];
     this.opts = { execWorks: true, pasteWorks: false, streamTicks: 3, loadTicks: 1, ...opts };
-    this.match = { composer: 0, send: 0, stop: 0, streaming: 0, assistant: 0, user: 0, login: 0, blocked: 0, signedIn: 0, dialog: 0, ...(opts.match || {}) };
+    this.match = { composer: 0, send: 0, stop: 0, streaming: 0, assistant: 0, user: 0, login: 0, blocked: 0, signedIn: 0, dialog: 0, notice: 0, ...(opts.match || {}) };
     this.home = url;
     this.href = this.opts.redirectTo || url;
     this.loadLeft = this.opts.loadTicks;
@@ -179,13 +179,17 @@ class FakeSite {
         if (this.opts.otherDialog) els.push(new El(this, 'DIV', 'Chat settings'));
         if (this.opts.verify || this.verifying) els.push(new El(this, 'DIV', 'Verification required\nVerify you are human'));
         break;
+      case 'notice':
+        // notice: text in the page's alert region (a usage limit banner).
+        if (this.opts.notice) els.push(new El(this, 'DIV', this.opts.notice));
+        break;
     }
     return s[r] && s[r][this.match[r]] ? els : [];
   }
   lookup(sel) {
     const open = this.dialogs.filter((d) => d.open && d.within === sel).map((d) => d.el);
     if (open.length) return open;
-    for (const r of ['composer', 'send', 'stop', 'streaming', 'assistant', 'user', 'login', 'blocked', 'signedIn', 'dialog']) {
+    for (const r of ['composer', 'send', 'stop', 'streaming', 'assistant', 'user', 'login', 'blocked', 'signedIn', 'dialog', 'notice']) {
       if (this.sel[r] && this.sel[r][this.match[r]] === sel) return this.role(r);
     }
     return [];
@@ -458,6 +462,18 @@ test('claude.ai through fallback selectors, paste fallback, streaming marker', a
   assert.deepEqual(page.submitted, ['line one\n\nline two']);
   assert.equal(r.conversation_id, page.newID);
   assert.equal(r.url, `https://claude.ai/chat/${page.newID}`);
+});
+
+test('a send reports the page alert text as its notice, uninterpreted: on a failure before the click and on success', async () => {
+  const limit = '5-hour limit reached - resets 2:00 PM';
+  let fc = fakeChrome((url) => new FakeSite('claudeai', url, { sendDisabled: true, notice: limit }));
+  await assert.rejects(sender(fc).send('claudeai', { message: 'x' }), (e) => e.code === 'send_failed' && e.notice === limit && e.clicked !== true);
+  fc = fakeChrome((url) => new FakeSite('claudeai', url, { notice: 'You have 2 messages left' }));
+  const r = await sender(fc).send('claudeai', { message: 'x' });
+  assert.equal(r.notice, 'You have 2 messages left');
+  fc = fakeChrome((url) => new FakeSite('claudeai', url));
+  assert.equal('notice' in (await sender(fc).send('claudeai', { message: 'x' })), false);
+  assertOnlyFixedScripts(fc.log);
 });
 
 test('claude.ai continues /chat/<id>; ChatGPT textarea composer and Enter when there is no send button', async () => {

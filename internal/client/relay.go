@@ -72,9 +72,10 @@ type AgentInfo struct {
 	Name             string `json:"name"`
 	Online           bool   `json:"online"`
 	// Status is the relay's one word for what the agent is doing (StatusBusy,
-	// StatusIdle, StatusStuck or StatusOffline), computed once on the relay
-	// so every surface shows the same thing. StatusReason says why a stuck
-	// agent is stuck ("claim lapsed"); BusyFor names the asker whose request
+	// StatusIdle, StatusStuck, StatusLimited or StatusOffline), computed once
+	// on the relay so every surface shows the same thing. StatusReason says
+	// why a stuck agent is stuck ("claim lapsed") or until when a limited
+	// one is limited ("until 14:00 UTC"); BusyFor names the asker whose request
 	// a busy agent holds and BusySince when it claimed it. They never carry
 	// request text. All are empty from relays that predate them.
 	Status       string    `json:"status,omitempty"`
@@ -123,12 +124,14 @@ type AgentInfo struct {
 
 // The statuses a relay reports in AgentInfo.Status. Busy means the agent
 // holds live claimed work or its host says it is working; stuck means work
-// waits on it and nothing is moving; idle and offline split the rest by
+// waits on it and nothing is moving; limited means a web agent's site is
+// out of messages until LimitedUntil; idle and offline split the rest by
 // whether it is polling now.
 const (
 	StatusBusy    = "busy"
 	StatusIdle    = "idle"
 	StatusStuck   = "stuck"
+	StatusLimited = "limited"
 	StatusOffline = "offline"
 )
 

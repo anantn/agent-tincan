@@ -44,7 +44,11 @@ type Capabilities struct {
 	HostStatus bool `json:"host_status,omitempty"`
 	// Watches is set by a relay that takes idle watches (POST
 	// /v1/watches).
-	Watches            bool  `json:"watches,omitempty"`
+	Watches bool `json:"watches,omitempty"`
+	// WebLimits is set by a relay that takes a web agent's "limited"
+	// web status with its reset time. An older relay refuses that state,
+	// so a web agent sends it only when this is set.
+	WebLimits          bool  `json:"web_limits,omitempty"`
 	Attachments        bool  `json:"attachments"`
 	MaxAttachmentBytes int64 `json:"max_attachment_bytes,omitempty"`
 	MaxAttachments     int   `json:"max_attachments,omitempty"`
