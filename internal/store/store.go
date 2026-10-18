@@ -1102,7 +1102,7 @@ func (s *Store) Reply(ctx context.Context, id, agent string, rep envelope.Reply)
 		return envelope.Reply{}, err
 	}
 	defer tx.Rollback()
-	if rep, err = s.replyTx(ctx, tx, id, agent, rep, false); err != nil {
+	if rep, err = s.replyTx(ctx, tx, id, agent, rep, ""); err != nil {
 		if errors.Is(err, ErrWrongState) {
 			_ = tx.Rollback()
 			err = s.wrongState(ctx, id, agent)
@@ -1113,18 +1113,18 @@ func (s *Store) Reply(ctx context.Context, id, agent string, rep envelope.Reply)
 }
 
 // replyTx closes open request id with agent's terminal reply rep inside tx:
-// the request takes rep's status and the reply row is written. byEmail adds
-// the email path's conditions (emailReplyGuard). It returns ErrWrongState
-// when the request is no longer open, no longer agent's (it moved), or
-// fails those conditions.
-func (s *Store) replyTx(ctx context.Context, tx *sql.Tx, id, agent string, rep envelope.Reply, byEmail bool) (envelope.Reply, error) {
+// the request takes rep's status and the reply row is written. guard, when
+// set, is a further SQL condition with guardArgs for its placeholders, such
+// as the email path's emailReplyGuard. It returns ErrWrongState when the
+// request is no longer open, no longer agent's (it moved), or fails guard.
+func (s *Store) replyTx(ctx context.Context, tx *sql.Tx, id, agent string, rep envelope.Reply, guard string, guardArgs ...any) (envelope.Reply, error) {
 	now := s.now()
 	args := []any{string(rep.Status), now.UnixMilli(), now.UnixMilli(), id, agent,
 		string(envelope.StatusQueued), string(envelope.StatusDelivered), string(envelope.StatusClaimed)}
 	where := ""
-	if byEmail {
-		where = " AND " + emailReplyGuard
-		args = append(args, now.UnixMilli())
+	if guard != "" {
+		where = " AND (" + guard + ")"
+		args = append(args, guardArgs...)
 	}
 	res, err := tx.ExecContext(ctx, `UPDATE requests SET status = ?, lease_until = 0, updated_at = ?, reply_seen_at = CASE WHEN kind = 'ping' THEN ? ELSE 0 END, reply_generation = reply_generation + 1, lease_lapsed_at = NULL
 		WHERE id = ? AND to_agent = ? AND status IN (?, ?, ?)`+where, args...)

@@ -315,18 +315,20 @@ func (s *Server) failover(ctx context.Context, req envelope.Request, f limitFact
 		}
 		return failoverOutcome{moved: true, req: moved, until: until}, nil
 	}
-	if !claimed && !heldUntil.IsZero() && heldUntil.UnixMilli() >= until.UnixMilli() {
-		return failoverOutcome{req: req, until: until}, nil
-	}
 	// A hold keeps the request's own expiry, so one that ends at or after it
 	// would let the ask lapse unsent with the asker still waiting. Fail it
-	// now instead, while the asker can still do something about it.
+	// now instead, while the asker can still do something about it. This
+	// runs before the existing-hold shortcut, so a hold already saved past
+	// the expiry (an older relay allowed one) is failed too.
 	expires, err := s.store.RequestExpiry(ctx, req.ID)
 	if err != nil {
 		return failoverOutcome{}, err
 	}
 	if !until.Before(expires) {
-		return s.failOutlivedHold(ctx, req, until, now)
+		return s.failOutlivedHold(ctx, req, until, now, claimed)
+	}
+	if !claimed && !heldUntil.IsZero() && heldUntil.UnixMilli() >= until.UnixMilli() {
+		return failoverOutcome{req: req, until: until}, nil
 	}
 	held, err := s.store.HoldBack(ctx, req.ID, from, until, claimed)
 	if err != nil {
@@ -345,11 +347,18 @@ func (s *Server) failover(ctx context.Context, req envelope.Request, f limitFact
 // before until and no teammate can take now, failed with a reply that says
 // why, since until is after req would expire. The reply goes through the
 // one reply path, as req's target, so the asker's waiters, held poll and
-// reply wake hear of it like any other reply.
-func (s *Server) failOutlivedHold(ctx context.Context, req envelope.Request, until, now time.Time) (failoverOutcome, error) {
+// reply wake hear of it like any other reply. Its write keeps HoldBack's
+// conditions in the same transaction (store.FailHeld): req must still be
+// queued, or for a handback (claimed) still under its live claim, so a
+// claim that won after the caller read req is not closed under its
+// claimant; that returns ErrWrongState.
+func (s *Server) failOutlivedHold(ctx context.Context, req envelope.Request, until, now time.Time, claimed bool) (failoverOutcome, error) {
 	body := fmt.Sprintf("%s is out of messages until %s, after this ask would expire; ask another teammate or re-ask after the reset.",
 		req.To, client.UTCClock(until, now))
-	if _, err := s.recordReply(ctx, req.ID, req.To, envelope.Reply{Status: envelope.StatusFailed, Body: body}, "", 0); err != nil {
+	rep := envelope.Reply{Status: envelope.StatusFailed, Body: body}
+	if _, err := s.recordReplyWith(ctx, req.ID, req.To, rep, false, func(rep envelope.Reply) (envelope.Reply, error) {
+		return s.store.FailHeld(ctx, req.ID, req.To, claimed, rep)
+	}); err != nil {
 		return failoverOutcome{}, err
 	}
 	s.record(ctx, "limit_outlives", req.ID, req.TraceID, "relay", store.DetailJSON(map[string]any{"agent": req.To, "until": until.UTC()}))

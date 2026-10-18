@@ -135,7 +135,7 @@ func (s *Store) ReplyByEmail(ctx context.Context, messageID, id, agent string, r
 	if n, _ := res.RowsAffected(); n == 0 {
 		return envelope.Reply{}, ErrEmailDecided
 	}
-	if rep, err = s.replyTx(ctx, tx, id, agent, rep, true); err != nil {
+	if rep, err = s.replyTx(ctx, tx, id, agent, rep, emailReplyGuard, s.now().UnixMilli()); err != nil {
 		return envelope.Reply{}, err
 	}
 	return rep, tx.Commit()

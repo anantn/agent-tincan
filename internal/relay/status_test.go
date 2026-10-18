@@ -10,6 +10,7 @@ import (
 
 	"github.com/mvanhorn/agent-tincan/internal/client"
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
+	"github.com/mvanhorn/agent-tincan/internal/identity"
 	"github.com/mvanhorn/agent-tincan/internal/store"
 )
 
@@ -296,21 +297,39 @@ func TestCapabilitiesHostStatus(t *testing.T) {
 
 // A host report that passed authentication before an admin removal but is
 // filed after it (the removal's cleanup already ran) is dropped, so no busy
-// entry outlives the agent until SessionGrace lapses. A report for an agent
-// still joined is kept.
+// entry outlives the agent until SessionGrace lapses. So is one filed after
+// the name was removed and joined again: the report belongs to the binding
+// that passed authentication, not to the name. A report for an agent still
+// joined is kept.
 func TestHostStatusAfterRemovalDropped(t *testing.T) {
 	h, clk, _ := statusHarness(t)
+	binding := func(name string) identity.Agent {
+		t.Helper()
+		a, found, err := h.srv.dir.Agent(t.Context(), name)
+		if err != nil || !found {
+			t.Fatalf("%s: found %v, %v", name, found, err)
+		}
+		return a
+	}
+	muse, instinct, grok := binding("muse"), binding("instinct"), binding("grokbot")
 	h.do(macAddr, "POST", "/v1/admin/remove", `{"name":"muse"}`, http.StatusOK, nil)
-	h.srv.setHostStatus(t.Context(), "muse", "s1", true, clk.Now())
-	h.srv.setHostStatus(t.Context(), "grokbot", "s1", true, clk.Now())
+	h.do(macAddr, "POST", "/v1/admin/remove", `{"name":"instinct"}`, http.StatusOK, nil)
+	h.joinAt(strangerAddr, "instinct")
+	h.srv.setHostStatus(t.Context(), muse, "s1", true, clk.Now())
+	h.srv.setHostStatus(t.Context(), instinct, "s1", true, clk.Now())
+	h.srv.setHostStatus(t.Context(), grok, "s1", true, clk.Now())
 	h.srv.mu.Lock()
 	_, museKept := h.srv.hostStatus["muse"]
-	grok := h.srv.hostStatus["grokbot"]["s1"]
+	_, instinctKept := h.srv.hostStatus["instinct"]
+	grokEntry := h.srv.hostStatus["grokbot"]["s1"]
 	h.srv.mu.Unlock()
 	if museKept {
 		t.Fatal("a report filed after muse's removal was kept")
 	}
-	if !grok.busy {
-		t.Fatalf("grokbot's report was dropped: %+v", grok)
+	if instinctKept {
+		t.Fatal("the removed instinct's report was kept for the instinct joined again under its name")
+	}
+	if !grokEntry.busy {
+		t.Fatalf("grokbot's report was dropped: %+v", grokEntry)
 	}
 }
