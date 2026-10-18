@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -16,11 +17,49 @@ func idleNotice(w Watch) envelope.Request {
 	return envelope.Request{From: "relay", To: w.Watcher, Kind: envelope.KindNotify, Hop: 1, Chain: []string{"relay"}, Body: w.Target + " is idle now. No reply needed."}
 }
 
+// joinAll puts names in the directory, as AddWatch needs both its agents
+// there.
+func joinAll(t *testing.T, s *Store, c *clock, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		if err := s.PutAgent(context.Background(), identity.Agent{Name: name, NodeID: "n" + name, NodeName: name, JoinedAt: c.t}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A watch needs both its watcher and its target in the directory, checked
+// in the insert's transaction: an admin removal that lands after the
+// relay's own agent check, but before the insert, leaves no watch for a
+// later agent joined under the name to inherit.
+func TestAddWatchRefusesMissingAgent(t *testing.T) {
+	s, c := open(t, ":memory:")
+	ctx := context.Background()
+	joinAll(t, s, c, "claude-code", "codex")
+	if _, err := s.DeleteAgent(ctx, "codex"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.AddWatch(ctx, "claude-code", "codex", 24*time.Hour); !errors.Is(err, ErrNoAgent) {
+		t.Fatalf("watch on a removed target: %v", err)
+	}
+	if _, _, err := s.AddWatch(ctx, "codex", "claude-code", 24*time.Hour); !errors.Is(err, ErrNoAgent) {
+		t.Fatalf("watch by a removed watcher: %v", err)
+	}
+	joinAll(t, s, c, "codex")
+	if pending, err := s.PendingWatches(ctx); err != nil || len(pending) != 0 {
+		t.Fatalf("rejoined codex inherits %+v %v", pending, err)
+	}
+	if _, created, err := s.AddWatch(ctx, "claude-code", "codex", 24*time.Hour); err != nil || !created {
+		t.Fatalf("watch after rejoin: %v %v", created, err)
+	}
+}
+
 // A second watch on the same target from the same watcher is the first
 // one; another watcher gets its own.
 func TestAddWatchDedupes(t *testing.T) {
 	s, c := open(t, ":memory:")
 	ctx := context.Background()
+	joinAll(t, s, c, "claude-code", "codex", "grokbot")
 	first, created, err := s.AddWatch(ctx, "claude-code", "codex", 24*time.Hour)
 	if err != nil || !created || !first.Expires.Equal(c.t.Add(24*time.Hour)) {
 		t.Fatalf("first = %+v %v %v", first, created, err)
@@ -42,8 +81,9 @@ func TestAddWatchDedupes(t *testing.T) {
 // second fire, from a racing caller or after a restart, queues nothing.
 func TestFireWatchOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "relay.db")
-	s, _ := open(t, path)
+	s, c := open(t, path)
 	ctx := context.Background()
+	joinAll(t, s, c, "claude-code", "codex")
 	w, _, err := s.AddWatch(ctx, "claude-code", "codex", 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -90,6 +130,7 @@ func TestFireWatchOnce(t *testing.T) {
 func TestWatchExpires(t *testing.T) {
 	s, c := open(t, ":memory:")
 	ctx := context.Background()
+	joinAll(t, s, c, "claude-code", "codex")
 	w, _, err := s.AddWatch(ctx, "claude-code", "codex", 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -111,11 +152,7 @@ func TestWatchExpires(t *testing.T) {
 func TestDeleteAgentDropsWatches(t *testing.T) {
 	s, c := open(t, ":memory:")
 	ctx := context.Background()
-	for _, name := range []string{"codex", "claude-code", "grokbot"} {
-		if err := s.PutAgent(ctx, identity.Agent{Name: name, NodeID: "n" + name, NodeName: name, JoinedAt: c.t}); err != nil {
-			t.Fatal(err)
-		}
-	}
+	joinAll(t, s, c, "codex", "claude-code", "grokbot")
 	for _, w := range [][2]string{{"claude-code", "codex"}, {"codex", "grokbot"}, {"claude-code", "grokbot"}} {
 		if _, _, err := s.AddWatch(ctx, w[0], w[1], 24*time.Hour); err != nil {
 			t.Fatal(err)
@@ -136,6 +173,7 @@ func TestDeleteAgentDropsWatches(t *testing.T) {
 func TestFireWatchReusedID(t *testing.T) {
 	s, c := open(t, ":memory:")
 	ctx := context.Background()
+	joinAll(t, s, c, "claude-code", "codex", "grokbot", "muse")
 	old, _, err := s.AddWatch(ctx, "claude-code", "codex", time.Hour)
 	if err != nil {
 		t.Fatal(err)

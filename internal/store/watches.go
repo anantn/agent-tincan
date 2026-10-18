@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
@@ -35,9 +36,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS watches_pending ON watches(watcher, target) WH
 	return err
 }
 
+// ErrNoAgent is AddWatch's answer when the watcher or the target is not
+// in the directory (any more).
+var ErrNoAgent = errors.New("unknown agent")
+
 // AddWatch records that watcher wants to be told when target is next idle,
 // for ttl. A pending watch for the same pair is returned as it is, with
-// created false, so asking twice still sends one notice.
+// created false, so asking twice still sends one notice. Both agents must
+// still be in the directory: the check runs in the insert's transaction,
+// after its first write, so a DeleteAgent cannot land between them and leave
+// a watch that a later agent joined under either name would inherit. It
+// returns ErrNoAgent otherwise.
 func (s *Store) AddWatch(ctx context.Context, watcher, target string, ttl time.Duration) (Watch, bool, error) {
 	now := s.now()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -48,6 +57,17 @@ func (s *Store) AddWatch(ctx context.Context, watcher, target string, ttl time.D
 	// A pending watch past its expiry would hold the pair's slot.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM watches WHERE watcher = ? AND target = ? AND expires_at <= ?`, watcher, target, now.UnixMilli()); err != nil {
 		return Watch{}, false, err
+	}
+	var known int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM agents WHERE name IN (?, ?)`, watcher, target).Scan(&known); err != nil {
+		return Watch{}, false, err
+	}
+	want := 2
+	if watcher == target {
+		want = 1
+	}
+	if known != want {
+		return Watch{}, false, ErrNoAgent
 	}
 	res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO watches (watcher, target, created_at, expires_at) VALUES (?, ?, ?, ?)`,
 		watcher, target, now.UnixMilli(), now.Add(ttl).UnixMilli())
