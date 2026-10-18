@@ -49,7 +49,9 @@ CREATE TABLE IF NOT EXISTS invites (
   code    TEXT PRIMARY KEY, -- hex HMAC digest of the one-time code, never the raw code
   name    TEXT NOT NULL,
   expires INTEGER NOT NULL,
-  kind    TEXT
+  kind    TEXT,
+  new_only  INTEGER NOT NULL DEFAULT 0, -- 1 for a code minted by InviteNew
+  mint_node TEXT -- the minting device's node id for a new_only code
 );
 CREATE TABLE IF NOT EXISTS requests (
   id          TEXT PRIMARY KEY,
@@ -424,18 +426,27 @@ func (s *Store) migrateAgentFeatures() error {
 	return err
 }
 
-// migrateInvites adds the kind column to an invites table created before
-// invites could carry the agent's kind. It is a no-op on a current table.
+// migrateInvites adds the columns an invites table created before invites
+// carried them lacks: kind, then new_only and mint_node (the redeem-time
+// check of a new-only code). It is a no-op on a current table.
 func (s *Store) migrateInvites() error {
-	var hasKind bool
-	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('invites') WHERE name = 'kind')`).Scan(&hasKind); err != nil {
-		return err
+	for _, col := range []struct{ name, definition string }{
+		{"kind", "TEXT"},
+		{"new_only", "INTEGER NOT NULL DEFAULT 0"},
+		{"mint_node", "TEXT"},
+	} {
+		var has bool
+		if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('invites') WHERE name = ?)`, col.name).Scan(&has); err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+		if _, err := s.db.Exec("ALTER TABLE invites ADD COLUMN " + col.name + " " + col.definition); err != nil {
+			return err
+		}
 	}
-	if hasKind {
-		return nil
-	}
-	_, err := s.db.Exec(`ALTER TABLE invites ADD COLUMN kind TEXT`)
-	return err
+	return nil
 }
 
 // migrateInviteCodeHash invalidates invites minted before codes were stored
@@ -690,8 +701,8 @@ func (s *Store) PutInvite(ctx context.Context, inv identity.Invite) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM invites WHERE name = ? AND code != ?`, inv.Name, inv.Code); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO invites(code, name, expires, kind) VALUES (?, ?, ?, ?)`,
-		inv.Code, inv.Name, inv.Expires.UnixMilli(), nullable(inv.Kind)); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO invites(code, name, expires, kind, new_only, mint_node) VALUES (?, ?, ?, ?, ?, ?)`,
+		inv.Code, inv.Name, inv.Expires.UnixMilli(), nullable(inv.Kind), inv.NewOnly, nullable(inv.MintNode)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -703,7 +714,7 @@ func (s *Store) PutInvite(ctx context.Context, inv identity.Invite) error {
 func (s *Store) TakeInvite(ctx context.Context, code string) (identity.Invite, bool, error) {
 	var inv identity.Invite
 	var exp int64
-	err := s.db.QueryRowContext(ctx, `DELETE FROM invites WHERE code = ? RETURNING code, name, expires, COALESCE(kind, '')`, code).Scan(&inv.Code, &inv.Name, &exp, &inv.Kind)
+	err := s.db.QueryRowContext(ctx, `DELETE FROM invites WHERE code = ? RETURNING code, name, expires, COALESCE(kind, ''), new_only, COALESCE(mint_node, '')`, code).Scan(&inv.Code, &inv.Name, &exp, &inv.Kind, &inv.NewOnly, &inv.MintNode)
 	if errors.Is(err, sql.ErrNoRows) {
 		return identity.Invite{}, false, nil
 	}

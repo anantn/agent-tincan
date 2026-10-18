@@ -706,6 +706,9 @@ func (s *Server) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// errPhoneTakesNoRequests refuses a send addressed to a phone agent.
+var errPhoneTakesNoRequests = errors.New("phone agents ask; they do not take requests")
+
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	from := s.agent(w, r)
 	if from == "" {
@@ -725,8 +728,16 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errAttachmentsOff)
 		return
 	}
-	if !s.isAgent(r.Context(), req.To) {
+	to, ok, err := s.dir.Agent(r.Context(), req.To)
+	if err != nil || !ok {
 		writeErr(w, http.StatusNotFound, errors.New("no such agent: "+req.To))
+		return
+	}
+	if to.Kind == onboard.KindPhone {
+		// The phone page never reads an inbox, so a send to it would sit
+		// unanswered. Replies to its own asks, and the relay's own notices,
+		// do not come through here.
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("%s: %w", req.To, errPhoneTakesNoRequests))
 		return
 	}
 	if req.Kind == envelope.KindPing {

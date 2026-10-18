@@ -227,9 +227,14 @@ goes out, at least 1. The payload carries no text or link: the page's service
 worker supplies the notification text and opens `/phone/#held` when it is
 tapped. Held sends that arrive close together share one round: a send while a
 round is already waiting joins it, and that round's count covers them all.
-A 404 or 410 deletes the subscription. Audit events, with subscription ids
-only: `push_subscribed`, `push_unsubscribed`, `push_sent` (`status`, or
-`error` of `timeout`, `address refused` or `send failed`).
+A 404 or 410 deletes the subscription (reason `gone`), and so does a 401 or
+403 (reason `rejected`): the push service no longer takes the relay's VAPID
+key for it, as after the key changes, and the page subscribes again under the
+new key on its next open. One admin device keeps at most 5 subscriptions; a
+new one past that deletes the device's least recently refreshed ones (reason
+`over cap`). Audit events, with subscription ids only: `push_subscribed`,
+`push_unsubscribed`, `push_sent` (`status`, or `error` of `timeout`,
+`address refused` or `send failed`).
 
 Kind `phone` is the owner's phone, joined from the phone page as its own
 agent: the page mints an invite with `POST /v1/admin/invite`
@@ -241,10 +246,18 @@ client on a machine with several agents. Its wake method is `none` and its
 stock good-at line is `the owner's phone; asks only, never answers`. A phone
 agent asks and never answers, so it is never a failover target or a room
 mention target; it may be a room member. The relay adds no route for it.
+`POST /v1/send` to a phone agent, of any kind, is refused with 400 `phone
+agents ask; they do not take requests`, since the page reads no inbox.
+Replies to the phone's own asks are unaffected: they go back through
+`POST /v1/requests/{id}/reply` and the page reads them by id.
 
 `new_only` on `POST /v1/admin/invite` makes the relay refuse with 409 when
 the name belongs to an agent bound to another machine, instead of minting a
-code that would move that agent to whoever redeems it. The caller's own agent
+code that would move that agent to whoever redeems it. The code remembers
+`new_only` and the minting device, and `POST /v1/join` checks the name again
+when the code is redeemed, under the same lock as the join: if by then an
+agent bound to another machine holds the name, the join is refused with the
+same 409 and the code is spent. The caller's own agent
 (bound to the calling device) may be invited again, and from the local admin
 socket any existing name is refused. Without `new_only`, as `tincan invite`
 sends it, an invite for an existing name still moves that agent on join.
