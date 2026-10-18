@@ -115,6 +115,12 @@ type Invite struct {
 	Name    string
 	Kind    string // applied to the agent on join when set
 	Expires time.Time
+	// NewOnly marks a code minted by InviteNew: Join refuses it when the
+	// name is by then bound to a machine other than MintNode.
+	NewOnly bool
+	// MintNode is the tailnet node id of the device that minted a NewOnly
+	// code, empty when it came from the local admin socket.
+	MintNode string
 }
 
 // Store persists agents and invites. The relay backs it with SQLite; tests
@@ -331,10 +337,16 @@ func (d *Directory) InviteKind(ctx context.Context, remoteAddr, name, kind strin
 	if err := d.requireAdmin(ctx, remoteAddr); err != nil {
 		return "", err
 	}
-	if !nameRE.MatchString(name) {
-		return "", fmt.Errorf("agent name %q must be 1-32 lowercase letters, digits, or dashes", name)
+	return d.mint(ctx, Invite{Name: name, Kind: kind})
+}
+
+// mint stores inv under a fresh code and returns the raw code. The caller
+// has checked admin rights.
+func (d *Directory) mint(ctx context.Context, inv Invite) (string, error) {
+	if !nameRE.MatchString(inv.Name) {
+		return "", fmt.Errorf("agent name %q must be 1-32 lowercase letters, digits, or dashes", inv.Name)
 	}
-	if err := checkKind(kind); err != nil {
+	if err := checkKind(inv.Kind); err != nil {
 		return "", err
 	}
 	code, err := NewCode()
@@ -343,7 +355,7 @@ func (d *Directory) InviteKind(ctx context.Context, remoteAddr, name, kind strin
 	}
 	// Persist only the digest; the raw code is returned once to the admin and
 	// never stored.
-	inv := Invite{Code: hashInviteCode(d.invitePepper, code), Name: name, Kind: kind, Expires: d.cfg.Now().Add(InviteTTL)}
+	inv.Code, inv.Expires = hashInviteCode(d.invitePepper, code), d.cfg.Now().Add(InviteTTL)
 	if err := d.store.PutInvite(ctx, inv); err != nil {
 		return "", err
 	}
@@ -353,35 +365,47 @@ func (d *Directory) InviteKind(ctx context.Context, remoteAddr, name, kind strin
 // InviteNew is InviteKind for a name that must not move an agent: it refuses
 // with ErrNameTaken when name is bound to a machine other than the caller's.
 // The caller's own agent may be invited again. The local admin socket has no
-// machine, so any existing agent refuses it.
+// machine, so any existing agent refuses it. The code remembers this, and
+// Join checks the name again when it is redeemed.
 func (d *Directory) InviteNew(ctx context.Context, remoteAddr, name, kind string) (string, error) {
 	if err := d.requireAdmin(ctx, remoteAddr); err != nil {
 		return "", err
+	}
+	mintNode := ""
+	if remoteAddr != LocalAdmin {
+		n, err := d.who.WhoIs(ctx, remoteAddr)
+		if err != nil {
+			return "", err
+		}
+		mintNode = n.ID
 	}
 	a, ok, err := d.store.AgentByName(ctx, name)
 	if err != nil {
 		return "", err
 	}
-	if ok {
-		mine := false
-		if remoteAddr != LocalAdmin {
-			n, err := d.who.WhoIs(ctx, remoteAddr)
-			if err != nil {
-				return "", err
-			}
-			mine = a.NodeID == n.ID
-		}
-		if !mine {
-			return "", fmt.Errorf("%s: %w", name, ErrNameTaken)
-		}
+	if err := newOnlyRefusal(a, ok, mintNode); err != nil {
+		return "", err
 	}
-	return d.InviteKind(ctx, remoteAddr, name, kind)
+	return d.mint(ctx, Invite{Name: name, Kind: kind, NewOnly: true, MintNode: mintNode})
+}
+
+// newOnlyRefusal is ErrNameTaken when agent a (found says it exists) is
+// bound to a machine other than mintNode. An empty mintNode (the local admin
+// socket) matches no machine.
+func newOnlyRefusal(a Agent, found bool, mintNode string) error {
+	if found && (mintNode == "" || a.NodeID != mintNode) {
+		return fmt.Errorf("%s: %w", a.Name, ErrNameTaken)
+	}
+	return nil
 }
 
 // Join binds the node behind remoteAddr to the invite's name. A node that
 // already carries agents gains another name alongside them. Re-inviting an
 // existing name moves it (and its kind, unless the invite names a new one) to
-// the new machine; other agents on the old machine stay.
+// the new machine; other agents on the old machine stay. A code minted by
+// InviteNew is refused with ErrNameTaken if the name has since come to be
+// bound to a machine other than the minting one; the check runs under the
+// same lock as the join, so no other join can slip in between.
 func (d *Directory) Join(ctx context.Context, remoteAddr, code string) (string, error) {
 	n, err := d.who.WhoIs(ctx, remoteAddr)
 	if err != nil {
@@ -397,9 +421,14 @@ func (d *Directory) Join(ctx context.Context, remoteAddr, code string) (string, 
 	if !ok || d.cfg.Now().After(inv.Expires) {
 		return "", ErrBadInvite
 	}
-	prev, _, err := d.Agent(ctx, inv.Name)
+	prev, found, err := d.Agent(ctx, inv.Name)
 	if err != nil {
 		return "", err
+	}
+	if inv.NewOnly {
+		if err := newOnlyRefusal(prev, found, inv.MintNode); err != nil {
+			return "", err
+		}
 	}
 	kind := prev.Kind
 	if inv.Kind != "" {

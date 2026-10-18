@@ -206,3 +206,93 @@ func TestPageInviteNewOnly(t *testing.T) {
 		t.Fatalf("CLI re-invite: %v", err)
 	}
 }
+
+// new_only is checked again when the code is redeemed: a name that another
+// device's agent took between mint and redeem is refused with the same 409
+// instead of moved to the phone, and the other agent keeps it. A code
+// minted without new_only (the CLI's re-invite) still moves the agent.
+func TestPageInviteNewOnlyRecheckedAtRedeem(t *testing.T) {
+	m := testrelay.New(t, relay.Config{})
+	page := hardened(t, m, "admin")
+	var inv struct{ Code string }
+	if code, body := pageCall(t, page, "POST", "/v1/admin/invite", "", map[string]any{"name": "phone", "kind": onboard.KindPhone, "new_only": true}, &inv); code != http.StatusOK || inv.Code == "" {
+		t.Fatalf("new_only invite for a free name: %d %s", code, body)
+	}
+	// Another device's agent comes to hold the name before the page redeems
+	// (a rebind, or a join that raced the page's mint).
+	if err := m.Store.PutAgent(t.Context(), identity.Agent{Name: "phone", NodeID: "nMUSE", NodeName: "muse", JoinedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := pageCall(t, page, "POST", "/v1/join", "", map[string]string{"code": inv.Code}, nil); code != http.StatusConflict || !strings.Contains(body, identity.ErrNameTaken.Error()) {
+		t.Fatalf("redeeming a new_only code for a name another device took: %d %s, want 409", code, body)
+	}
+	if a, _, err := m.Dir.Agent(t.Context(), "phone"); err != nil || a.NodeID != "nMUSE" {
+		t.Fatalf("phone after the refused join: %+v %v", a, err)
+	}
+
+	// A new_only code for this device's own agent still redeems.
+	m.JoinOnMachineOf(t, "admin", "mine")
+	if code, body := pageCall(t, page, "POST", "/v1/admin/invite", "", map[string]any{"name": "mine", "kind": onboard.KindPhone, "new_only": true}, &inv); code != http.StatusOK {
+		t.Fatalf("new_only invite for this device's own agent: %d %s", code, body)
+	}
+	if code, body := pageCall(t, page, "POST", "/v1/join", "", map[string]string{"code": inv.Code}, nil); code != http.StatusOK {
+		t.Fatalf("redeeming a new_only code for this device's own agent: %d %s", code, body)
+	}
+
+	// A plain re-invite moves an existing agent on join, as before.
+	code, err := m.Client(t, "admin").Invite(t.Context(), "phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, body := pageCall(t, page, "POST", "/v1/join", "", map[string]string{"code": code}, nil); code != http.StatusOK {
+		t.Fatalf("redeeming a plain re-invite: %d %s", code, body)
+	}
+	if a, _, err := m.Dir.Agent(t.Context(), "phone"); err != nil || a.NodeID != "nMAC" {
+		t.Fatalf("phone after the plain re-invite: %+v %v", a, err)
+	}
+}
+
+// A phone agent asks and never answers, so the relay refuses a teammate's
+// send to it (ask or notify) at send time. Replies to the phone's own asks
+// still reach it.
+func TestSendToPhoneRefused(t *testing.T) {
+	m := testrelay.New(t, relay.Config{})
+	page := hardened(t, m, "admin")
+	var inv struct{ Code string }
+	if code, body := pageCall(t, page, "POST", "/v1/admin/invite", "", map[string]any{"name": "phone", "kind": onboard.KindPhone, "new_only": true}, &inv); code != http.StatusOK {
+		t.Fatalf("invite: %d %s", code, body)
+	}
+	if code, body := pageCall(t, page, "POST", "/v1/join", "", map[string]string{"code": inv.Code}, nil); code != http.StatusOK {
+		t.Fatalf("join: %d %s", code, body)
+	}
+	muse := m.Client(t, "muse")
+	for _, kind := range []envelope.Kind{envelope.KindAsk, envelope.KindNotify, envelope.KindPing} {
+		body := "are you there?"
+		if kind == envelope.KindPing {
+			body = ""
+		}
+		_, err := muse.Send(t.Context(), "phone", body, kind, "", false)
+		var se *client.APIError
+		if !errors.As(err, &se) || se.Code != http.StatusBadRequest || !strings.Contains(err.Error(), "phone agents ask; they do not take requests") {
+			t.Fatalf("%s to the phone: %v, want 400 refusal", kind, err)
+		}
+	}
+	if n := len(auditEvents(t, m, "queued")); n != 0 {
+		t.Fatalf("queued audit rows after refused sends: %d", n)
+	}
+
+	var sent envelope.SendResponse
+	if code, body := pageCall(t, page, "POST", "/v1/send", "phone", map[string]string{"to": "muse", "body": "what time is it?", "kind": "ask"}, &sent); code != http.StatusCreated {
+		t.Fatalf("ask from the phone: %d %s", code, body)
+	}
+	if _, err := muse.Claim(t.Context(), sent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := muse.Reply(t.Context(), sent.ID, "noon", envelope.StatusAnswered); err != nil {
+		t.Fatalf("reply to the phone's ask: %v", err)
+	}
+	var res envelope.Result
+	if code, body := pageCall(t, page, "GET", "/v1/requests/"+sent.ID, "phone", nil, &res); code != http.StatusOK || res.Reply == nil || res.Reply.Body != "noon" {
+		t.Fatalf("reading the reply: %d %s", code, body)
+	}
+}

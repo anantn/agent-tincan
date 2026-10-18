@@ -1,9 +1,11 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"time"
 )
 
@@ -127,4 +129,41 @@ func (s *Store) PushSubscriptions(ctx context.Context) ([]PushSubscription, erro
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// PrunePushSubscriptions keeps node's keep most recently updated
+// subscriptions, deletes the rest, and returns the deleted ids, oldest
+// first. Other nodes' subscriptions are untouched.
+func (s *Store) PrunePushSubscriptions(ctx context.Context, node string, keep int) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `DELETE FROM push_subscriptions WHERE node = ? AND id NOT IN (
+  SELECT id FROM push_subscriptions WHERE node = ? ORDER BY updated_at DESC, rowid DESC LIMIT ?
+) RETURNING id, updated_at, rowid`, node, node, max(keep, 0))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type dropped struct {
+		id             string
+		updated, rowid int64
+	}
+	var out []dropped
+	for rows.Next() {
+		var d dropped
+		if err := rows.Scan(&d.id, &d.updated, &d.rowid); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// RETURNING rows come in no set order.
+	slices.SortFunc(out, func(a, b dropped) int {
+		return cmp.Or(cmp.Compare(a.updated, b.updated), cmp.Compare(a.rowid, b.rowid))
+	})
+	ids := make([]string, len(out))
+	for i, d := range out {
+		ids[i] = d.id
+	}
+	return ids, nil
 }

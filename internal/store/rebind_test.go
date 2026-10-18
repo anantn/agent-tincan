@@ -124,3 +124,37 @@ func TestInvitesTableGainsKindColumn(t *testing.T) {
 		t.Fatalf("digest invite after reopen = %+v, %v, %v", inv, ok, err)
 	}
 }
+
+// An invites table from before invites carried new_only gains the
+// new_only and mint_node columns on open, and opening again changes
+// nothing. A new_only invite round-trips its flag and minting node; a
+// plain one comes back without them.
+func TestInvitesTableGainsNewOnlyColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	old, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`CREATE TABLE invites (code TEXT PRIMARY KEY, name TEXT NOT NULL, expires INTEGER NOT NULL, kind TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	old.Close()
+
+	s, c := open(t, path)
+	ctx := context.Background()
+	plain, newOnly := strings.Repeat("b4", 32), strings.Repeat("c5", 32)
+	if err := s.PutInvite(ctx, identity.Invite{Code: plain, Name: "muse", Expires: c.t.Add(identity.InviteTTL)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutInvite(ctx, identity.Invite{Code: newOnly, Name: "phone", Kind: "phone", NewOnly: true, MintNode: "nMAC", Expires: c.t.Add(identity.InviteTTL)}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s2, _ := open(t, path)
+	if inv, ok, err := s2.TakeInvite(ctx, plain); err != nil || !ok || inv.NewOnly || inv.MintNode != "" {
+		t.Fatalf("plain invite after reopen = %+v, %v, %v", inv, ok, err)
+	}
+	if inv, ok, err := s2.TakeInvite(ctx, newOnly); err != nil || !ok || !inv.NewOnly || inv.MintNode != "nMAC" || inv.Kind != "phone" {
+		t.Fatalf("new_only invite after reopen = %+v, %v, %v", inv, ok, err)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -415,5 +416,55 @@ func TestPushStopsWithTheRelay(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("WaitPush did not return after Stop with a push in flight")
+	}
+}
+
+// A push service that answers 401 or 403 no longer accepts the relay's
+// VAPID key for the subscription (the key changed), so the relay deletes
+// it with an audit row saying why.
+func TestPushUnauthorizedDeletesSubscription(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			m := pushMesh(t, 2*time.Second)
+			svc := newPushService(t, status)
+			if code, body := subscribe(t, m, svc.srv.URL+"/push/revoked", newBrowserKeys(t).json()); code != http.StatusOK {
+				t.Fatalf("subscribe: %d %s", code, body)
+			}
+			holdOne(t, m)
+			gone := waitAudit(t, m, "push_unsubscribed", 1)
+			if !strings.Contains(gone[0].Detail, `"reason":"rejected"`) || !strings.Contains(gone[0].Detail, fmt.Sprintf(`"status":%d`, status)) {
+				t.Fatalf("push_unsubscribed detail %q", gone[0].Detail)
+			}
+			if subs, err := m.Store.PushSubscriptions(t.Context()); err != nil || len(subs) != 0 {
+				t.Fatalf("subscriptions after %d: %+v %v", status, subs, err)
+			}
+		})
+	}
+}
+
+// One admin device keeps at most relay.MaxPushSubscriptionsPerDevice
+// subscriptions: a new one past the cap drops that device's oldest, with an
+// audit row for each.
+func TestPushSubscriptionsCappedPerDevice(t *testing.T) {
+	m := pushMesh(t, 2*time.Second)
+	svc := newPushService(t, http.StatusCreated)
+	total := relay.MaxPushSubscriptionsPerDevice + 2
+	for i := range total {
+		if code, body := subscribe(t, m, fmt.Sprintf("%s/push/%d", svc.srv.URL, i), newBrowserKeys(t).json()); code != http.StatusOK {
+			t.Fatalf("subscribe %d: %d %s", i, code, body)
+		}
+	}
+	subs, err := m.Store.PushSubscriptions(t.Context())
+	if err != nil || len(subs) != relay.MaxPushSubscriptionsPerDevice {
+		t.Fatalf("subscriptions = %d %v, want %d", len(subs), err, relay.MaxPushSubscriptionsPerDevice)
+	}
+	for _, sub := range subs {
+		if strings.HasSuffix(sub.Endpoint, "/push/0") || strings.HasSuffix(sub.Endpoint, "/push/1") {
+			t.Fatalf("an oldest subscription survived the cap: %s", sub.Endpoint)
+		}
+	}
+	dropped := auditEvents(t, m, "push_unsubscribed")
+	if len(dropped) != 2 || !strings.Contains(dropped[0].Detail, `"reason":"over cap"`) || strings.Contains(dropped[0].Detail, svc.srv.URL) {
+		t.Fatalf("push_unsubscribed rows = %+v", dropped)
 	}
 }

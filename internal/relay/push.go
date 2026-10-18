@@ -38,6 +38,12 @@ const pushTimeout = 10 * time.Second
 // pushTTL is how long a push service keeps an undelivered alert.
 const pushTTL = 3600
 
+// MaxPushSubscriptionsPerDevice is how many subscriptions one admin device
+// keeps. A browser that resubscribes (a cleared site, a new key) leaves its
+// old endpoint behind; past the cap the device's least recently refreshed
+// ones are dropped.
+const MaxPushSubscriptionsPerDevice = 5
+
 // pushParallel bounds how many subscriptions one round sends to at once.
 const pushParallel = 4
 
@@ -258,11 +264,21 @@ func (s *Server) pushOne(ctx context.Context, p *Pusher, sub store.PushSubscript
 		return
 	}
 	resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+	// 404 and 410: the push service dropped the subscription. 401 and 403:
+	// it no longer takes the relay's VAPID key for it (the key changed),
+	// and the page subscribes again under the new key on its next open.
+	reason := ""
+	switch resp.StatusCode {
+	case http.StatusNotFound, http.StatusGone:
+		reason = "gone"
+	case http.StatusUnauthorized, http.StatusForbidden:
+		reason = "rejected"
+	}
+	if reason != "" {
 		if _, err := s.store.DeletePushSubscriptionID(ctx, sub.ID); err != nil {
 			log.Printf("push: drop subscription %s: %v", sub.ID, err)
 		}
-		s.record(ctx, "push_unsubscribed", "", "", "relay", store.DetailJSON(map[string]any{"subscription": sub.ID, "reason": "gone", "status": resp.StatusCode}))
+		s.record(ctx, "push_unsubscribed", "", "", "relay", store.DetailJSON(map[string]any{"subscription": sub.ID, "reason": reason, "status": resp.StatusCode}))
 		return
 	}
 	s.record(ctx, "push_sent", "", "", "relay", store.DetailJSON(map[string]any{"subscription": sub.ID, "status": resp.StatusCode}))
@@ -336,6 +352,13 @@ func (s *Server) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	if created {
 		s.record(r.Context(), "push_subscribed", "", "", s.remote(r), store.DetailJSON(map[string]any{"subscription": sub.ID, "device": n.Name}))
+		dropped, err := s.store.PrunePushSubscriptions(r.Context(), n.ID, MaxPushSubscriptionsPerDevice)
+		if err != nil {
+			log.Printf("push: cap subscriptions of %s: %v", n.Name, err)
+		}
+		for _, id := range dropped {
+			s.record(r.Context(), "push_unsubscribed", "", "", "relay", store.DetailJSON(map[string]any{"subscription": id, "device": n.Name, "reason": "over cap"}))
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": sub.ID})
 }

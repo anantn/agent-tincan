@@ -73,3 +73,41 @@ func TestPushSubscriptionsSurviveReopen(t *testing.T) {
 		t.Fatalf("after reopen = %+v %v", subs, err)
 	}
 }
+
+// PrunePushSubscriptions keeps a node's newest subscriptions and returns
+// the ids it dropped; other nodes' rows are left alone.
+func TestPrunePushSubscriptions(t *testing.T) {
+	s, c := open(t, ":memory:")
+	ctx := context.Background()
+	var ids []string
+	for i := range 4 {
+		c.t = c.t.Add(time.Minute)
+		sub, _, err := s.UpsertPushSubscription(ctx, PushSubscription{Endpoint: "https://web.push.apple.com/" + string(rune('a'+i)), P256dh: "k", Auth: "a", Device: "iphone", Node: "nPHONE"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, sub.ID)
+	}
+	other, _, err := s.UpsertPushSubscription(ctx, PushSubscription{Endpoint: "https://fcm.googleapis.com/x", P256dh: "k", Auth: "a", Device: "pixel", Node: "nPIXEL"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Refreshing the oldest makes it the newest.
+	c.t = c.t.Add(time.Minute)
+	if _, _, err := s.UpsertPushSubscription(ctx, PushSubscription{Endpoint: "https://web.push.apple.com/a", P256dh: "k2", Auth: "a", Device: "iphone", Node: "nPHONE"}); err != nil {
+		t.Fatal(err)
+	}
+	dropped, err := s.PrunePushSubscriptions(ctx, "nPHONE", 2)
+	if err != nil || len(dropped) != 2 || dropped[0] != ids[1] || dropped[1] != ids[2] {
+		t.Fatalf("dropped = %v %v, want %v", dropped, err, ids[1:3])
+	}
+	subs, err := s.PushSubscriptions(ctx)
+	if err != nil || len(subs) != 3 {
+		t.Fatalf("left = %+v %v", subs, err)
+	}
+	for _, sub := range subs {
+		if sub.ID != ids[0] && sub.ID != ids[3] && sub.ID != other.ID {
+			t.Fatalf("unexpected survivor %+v", sub)
+		}
+	}
+}
