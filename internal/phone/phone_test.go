@@ -218,6 +218,21 @@ func TestPushAlertsInThePage(t *testing.T) {
 	}
 }
 
+// A room card names the request to answer for a question: on the
+// question post (its reply_to) and on the asking post's mention line.
+func TestRoomQuestionNamesRequest(t *testing.T) {
+	app := read(t, "app.js")
+	if !strings.Contains(app, `"question, answer with request " + id`) {
+		t.Error("app.js must label a question with its request id")
+	}
+	if body := funcBody(t, app, "postTag"); !strings.Contains(body, "questionTag(p.reply_to)") {
+		t.Errorf("postTag must name the question's request:\n%s", body)
+	}
+	if body := funcBody(t, app, "postCard"); !strings.Contains(body, "needs_input") || !strings.Contains(body, "questionTag(m.request_id)") {
+		t.Errorf("postCard must name a questioned mention's request:\n%s", body)
+	}
+}
+
 // funcBody is the source of the top-level function name in src, up to its
 // closing brace at the start of a line.
 func funcBody(t *testing.T, src, name string) string {

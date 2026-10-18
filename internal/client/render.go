@@ -550,13 +550,15 @@ func FormatRoomThread(th envelope.RoomThread, now time.Time) string {
 }
 
 // FormatRoomPost renders one post: "#12 codex, 15:04 (question):", its
-// text, and a line per mention that has not been answered.
+// text, and a line per mention that has not been answered. A question
+// names the request the poster answers it on, so the id is at hand
+// without check_inbox.
 func FormatRoomPost(p envelope.RoomPost, now time.Time) string {
 	var b strings.Builder
 	tag := ""
 	switch p.Status {
 	case envelope.StatusNeedsInput:
-		tag = " (question)"
+		tag = " (" + questionTag(p.ReplyTo) + ")"
 	case envelope.StatusFailed, envelope.StatusDeclined:
 		tag = " (" + string(p.Status) + ")"
 	}
@@ -566,11 +568,23 @@ func FormatRoomPost(p envelope.RoomPost, now time.Time) string {
 		case envelope.StatusAnswered, envelope.StatusFailed, envelope.StatusDeclined:
 		case envelope.StatusExpired, envelope.StatusCancelled:
 			fmt.Fprintf(&b, "  %s did not answer (%s)\n", m.Agent, m.Status)
+		case envelope.StatusNeedsInput:
+			fmt.Fprintf(&b, "  waiting on %s (%s)\n", m.Agent, questionTag(m.RequestID))
 		default:
 			fmt.Fprintf(&b, "  waiting on %s\n", m.Agent)
 		}
 	}
 	return b.String()
+}
+
+// questionTag labels a question back on a mention with the request to
+// answer it on: "question, answer with request <id>", or "question" when
+// the id is unknown.
+func questionTag(requestID string) string {
+	if requestID == "" {
+		return "question"
+	}
+	return "question, answer with request " + requestID
 }
 
 // FormatRoomPostResponse renders the relay's answer to a post: where it

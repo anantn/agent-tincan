@@ -609,11 +609,15 @@ function roomError(msg) {
   err.hidden = !msg;
 }
 
-function postTag(status) {
-  switch (status) {
-    case "needs_input": return ", question";
+// questionTag names the request a question back on a mention is answered
+// on, so the poster has the id without digging in the inbox.
+const questionTag = (id) => (id ? "question, answer with request " + id : "question");
+
+function postTag(p) {
+  switch (p.status) {
+    case "needs_input": return ", " + questionTag(p.reply_to);
     case "failed":
-    case "declined": return ", " + status;
+    case "declined": return ", " + p.status;
     default: return "";
   }
 }
@@ -621,12 +625,15 @@ function postTag(status) {
 function postCard(p) {
   const li = el("li", "card");
   li.append(el("p", "route", "#" + p.id + " " + p.author));
-  li.append(el("p", "meta", hhmm(new Date(p.created_at)) + postTag(p.status)));
+  li.append(el("p", "meta", hhmm(new Date(p.created_at)) + postTag(p)));
   li.append(el("p", "body", p.body));
   for (const m of p.mentions || []) {
     if (["answered", "failed", "declined"].includes(m.status)) continue;
     const gone = m.status === "expired" || m.status === "cancelled";
-    li.append(el("p", "meta", gone ? m.agent + " did not answer (" + m.status + ")" : "waiting on " + m.agent));
+    let line = "waiting on " + m.agent;
+    if (gone) line = m.agent + " did not answer (" + m.status + ")";
+    else if (m.status === "needs_input") line += " (" + questionTag(m.request_id) + ")";
+    li.append(el("p", "meta", line));
   }
   return li;
 }
