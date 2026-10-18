@@ -9,7 +9,8 @@ package relay
 // sweep) to a target already limited, and when the target hands back an
 // ask it claimed but did not send (POST /v1/requests/{id}/handback). With
 // nowhere to go the ask stays with its target, held back until the limit
-// resets, and the asker is told it waits.
+// resets, and the asker is told it waits, unless the reset is after the
+// ask would expire: then it is failed at once with a reply saying so.
 
 import (
 	"bytes"
@@ -272,8 +273,11 @@ func (s *Server) checkMove(ctx context.Context, req envelope.Request, to string)
 // failoverOutcome is what failover did with one ask.
 type failoverOutcome struct {
 	moved bool
-	req   envelope.Request // the request as it stands after
-	until time.Time        // the old target's reset time
+	// failed: the hold would have outlived the request, so the relay
+	// closed it failed and told the asker instead.
+	failed bool
+	req    envelope.Request // the request as it stands after
+	until  time.Time        // the old target's reset time
 }
 
 // failover moves req, an eligible ask to a target limited until until, to
@@ -314,6 +318,16 @@ func (s *Server) failover(ctx context.Context, req envelope.Request, f limitFact
 	if !claimed && !heldUntil.IsZero() && heldUntil.UnixMilli() >= until.UnixMilli() {
 		return failoverOutcome{req: req, until: until}, nil
 	}
+	// A hold keeps the request's own expiry, so one that ends at or after it
+	// would let the ask lapse unsent with the asker still waiting. Fail it
+	// now instead, while the asker can still do something about it.
+	expires, err := s.store.RequestExpiry(ctx, req.ID)
+	if err != nil {
+		return failoverOutcome{}, err
+	}
+	if !until.Before(expires) {
+		return s.failOutlivedHold(ctx, req, until, now)
+	}
 	held, err := s.store.HoldBack(ctx, req.ID, from, until, claimed)
 	if err != nil {
 		return failoverOutcome{}, err
@@ -325,6 +339,21 @@ func (s *Server) failover(ctx context.Context, req envelope.Request, f limitFact
 		s.hub.notify(requestKey(held.ID))
 	}
 	return failoverOutcome{req: held, until: until}, nil
+}
+
+// failOutlivedHold closes req, an ask its limited target cannot take
+// before until and no teammate can take now, failed with a reply that says
+// why, since until is after req would expire. The reply goes through the
+// one reply path, as req's target, so the asker's waiters, held poll and
+// reply wake hear of it like any other reply.
+func (s *Server) failOutlivedHold(ctx context.Context, req envelope.Request, until, now time.Time) (failoverOutcome, error) {
+	body := fmt.Sprintf("%s is out of messages until %s, after this ask would expire; ask another teammate or re-ask after the reset.",
+		req.To, client.UTCClock(until, now))
+	if _, err := s.recordReply(ctx, req.ID, req.To, envelope.Reply{Status: envelope.StatusFailed, Body: body}, "", 0); err != nil {
+		return failoverOutcome{}, err
+	}
+	s.record(ctx, "limit_outlives", req.ID, req.TraceID, "relay", store.DetailJSON(map[string]any{"agent": req.To, "until": until.UTC()}))
+	return failoverOutcome{failed: true, req: req, until: until}, nil
 }
 
 // failoverQueued is failover for an ask just queued: when its target is a
@@ -484,8 +513,11 @@ func (s *Server) handleHandback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res := client.HandbackResult{Outcome: client.HandbackRequeued, Until: until.UTC()}
-	if out.moved {
+	switch {
+	case out.moved:
 		res = client.HandbackResult{Outcome: client.HandbackMoved, To: out.req.To}
+	case out.failed:
+		res = client.HandbackResult{Outcome: client.HandbackFailed, Until: until.UTC()}
 	}
 	s.record(r.Context(), "handed_back", id, req.TraceID, name, store.DetailJSON(map[string]any{"outcome": res.Outcome}))
 	writeJSON(w, http.StatusOK, res)

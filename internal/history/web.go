@@ -828,6 +828,9 @@ func (w *WebAgent) handBack(ctx context.Context, req envelope.Request, until tim
 	case err == nil && res.Outcome == client.HandbackMoved:
 		w.logf("request %s from %s: not sent; handed back and moved to %s", req.ID, req.From, res.To)
 		return true
+	case err == nil && res.Outcome == client.HandbackFailed:
+		w.logf("request %s from %s: not sent; handed back and failed by the relay, since the limit outlasts the request", req.ID, req.From)
+		return true
 	case err == nil:
 		w.logf("request %s from %s: not sent; handed back to wait until %s", req.ID, req.From, res.Until.Local().Format(time.RFC3339))
 		return true

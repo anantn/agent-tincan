@@ -152,6 +152,18 @@ func (s *Store) HoldBack(ctx context.Context, id, agent string, until time.Time,
 	return req, err
 }
 
+// RequestExpiry is when request id expires.
+func (s *Store) RequestExpiry(ctx context.Context, id string) (time.Time, error) {
+	var ms int64
+	if err := s.db.QueryRowContext(ctx, `SELECT expires_at FROM requests WHERE id = ?`, id).Scan(&ms); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return time.Time{}, ErrNotFound
+		}
+		return time.Time{}, err
+	}
+	return time.UnixMilli(ms), nil
+}
+
 // ClaimLapsed reports whether any claim on request id ever ran out of
 // lease. Its claimant may have typed the ask into a site before it went
 // quiet, so a later claimant handing it back cannot vouch that it is

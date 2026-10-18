@@ -488,8 +488,9 @@ at two points only:
   reported; an agent that reported none gets 409. The relay advertises
   `handback: true` in capabilities; a web agent against an older relay, or one
   that gets 409, replies `failed` as before. The answer is
-  `{"outcome": "moved", "to": "gemini-web"}` or
-  `{"outcome": "requeued", "until": "<RFC 3339>"}`.
+  `{"outcome": "moved", "to": "gemini-web"}`,
+  `{"outcome": "requeued", "until": "<RFC 3339>"}` or
+  `{"outcome": "failed", "until": "<RFC 3339>"}` (see below).
 
 An ask never moves when it is to or from `dot-web`, from a `council`, was ever
 held for approval, is a `notify` or `ping`, is in a group, came from a room
@@ -526,6 +527,15 @@ claim by id all skip it until then, so it is not handed back in a loop), and the
 asker is told it waits. Each sweep releases a held-back ask at once when its
 target no longer reports a limit (it reported signed in, or the limit passed),
 and holds it only until the new reset when the target reports an earlier one.
+
+A hold keeps the request's own `expires_at`. When the reset would come at or
+after the ask expires (on the send, on a sweep after the target reports a later
+reset, or on a handback), the relay does not hold it to lapse unsent: it closes
+the ask `failed` at once, as its target, with the reply "<agent> is out of
+messages until <time>, after this ask would expire; ask another teammate or
+re-ask after the reset." The asker hears of it like any reply (no wait note is
+sent), the relay audits `limit_outlives` (agent, until), and a handback answers
+`{"outcome": "failed", "until": "<RFC 3339>"}`.
 
 Failover adds two `requests` columns, `moved_from` (JSON array, default `''`)
 and `deliver_after` (Unix ms, default 0). An older relay opening the database
