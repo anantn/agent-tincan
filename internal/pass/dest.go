@@ -127,10 +127,16 @@ func Read(ctx context.Context, r history.Reader, id string, w history.Window) (h
 // through: one list request, past which a chat goes untitled.
 const titleLookup = 50
 
+// titleAge is the age limit listedTitle lists with. A chat named by id is
+// read whatever its age, so its title lookup is bounded by titleLookup
+// alone, not by the window's MaxAge.
+const titleAge = 100 * 365 * 24 * time.Hour
+
 // listedTitle is the title the list shows for conversation id, "" when it
 // is not among the titleLookup newest or the list fails: a title is worth
 // one list request, never a failed pass.
 func listedTitle(ctx context.Context, r history.Reader, id string, w history.Window) string {
+	w.MaxAge = titleAge
 	page, err := r.List(ctx, titleLookup, history.Options{Window: w, All: true})
 	if err != nil {
 		return ""

@@ -59,14 +59,24 @@ type fakeReader struct {
 	// untitledReads drops the title from a read, as Gemini's
 	// conversation read does: only its list carries titles.
 	untitledReads bool
+	// agedList drops from a list the conversations older than the
+	// window's MaxAge, as the live readers do.
+	agedList bool
 }
 
 func (f *fakeReader) Source() history.Source { return f.src }
 
-func (f *fakeReader) List(_ context.Context, count int, _ history.Options) (history.Page, error) {
+func (f *fakeReader) List(_ context.Context, count int, opts history.Options) (history.Page, error) {
 	f.lists++
+	maxAge := opts.Window.MaxAge
+	if maxAge <= 0 {
+		maxAge = history.DefaultWindow().MaxAge
+	}
 	var p history.Page
 	for _, c := range f.convs[:min(count, len(f.convs))] {
+		if f.agedList && c.UpdatedAt.Before(time.Now().Add(-maxAge)) {
+			continue
+		}
 		c.Messages = nil
 		p.Conversations = append(p.Conversations, c)
 	}
@@ -130,6 +140,20 @@ func TestReadKeepsListTitle(t *testing.T) {
 	titled := &fakeReader{src: history.SourceChatGPT, convs: []history.Conversation{older}}
 	if c, err := Read(t.Context(), titled, "older", history.Window{}); err != nil || c.Title != "Garden plan" || titled.lists != 0 {
 		t.Fatalf("titled read = %q, %v, %d lists", c.Title, err, titled.lists)
+	}
+}
+
+// A chat named by id keeps its listed title when it is older than the
+// window: the window bounds which chat is the newest, not whose title
+// counts.
+func TestReadListedTitlePastWindow(t *testing.T) {
+	newest, old := chat(2), chat(1)
+	newest.ID, newest.Title, newest.UpdatedAt = "newest", "Fresh", time.Now()
+	old.ID, old.Title, old.UpdatedAt = "old", "Garden plan", time.Now().Add(-45*24*time.Hour)
+	r := &fakeReader{src: history.SourceGemini, convs: []history.Conversation{newest, old}, untitledReads: true, agedList: true}
+	c, err := Read(t.Context(), r, "old", history.Window{})
+	if err != nil || c.Title != "Garden plan" {
+		t.Fatalf("old by id = %q, %v", c.Title, err)
 	}
 }
 
