@@ -293,3 +293,24 @@ func TestCapabilitiesHostStatus(t *testing.T) {
 		t.Fatalf("capabilities = %+v", caps)
 	}
 }
+
+// A host report that passed authentication before an admin removal but is
+// filed after it (the removal's cleanup already ran) is dropped, so no busy
+// entry outlives the agent until SessionGrace lapses. A report for an agent
+// still joined is kept.
+func TestHostStatusAfterRemovalDropped(t *testing.T) {
+	h, clk, _ := statusHarness(t)
+	h.do(macAddr, "POST", "/v1/admin/remove", `{"name":"muse"}`, http.StatusOK, nil)
+	h.srv.setHostStatus(t.Context(), "muse", "s1", true, clk.Now())
+	h.srv.setHostStatus(t.Context(), "grokbot", "s1", true, clk.Now())
+	h.srv.mu.Lock()
+	_, museKept := h.srv.hostStatus["muse"]
+	grok := h.srv.hostStatus["grokbot"]["s1"]
+	h.srv.mu.Unlock()
+	if museKept {
+		t.Fatal("a report filed after muse's removal was kept")
+	}
+	if !grok.busy {
+		t.Fatalf("grokbot's report was dropped: %+v", grok)
+	}
+}

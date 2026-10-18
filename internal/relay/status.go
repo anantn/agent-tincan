@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -125,16 +126,40 @@ func (s *Server) handleHostStatus(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	now := s.cfg.Now()
+	s.setHostStatus(r.Context(), name, sess, in.Busy, s.cfg.Now())
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// setHostStatus files agent's session's host report, unless agent is no
+// longer in the directory. An admin removal can land after the caller was
+// authenticated: the removal unbinds the agent and then, under s.mu, drops
+// its host status. So the report is written under s.mu first and the
+// directory checked after. Either the check runs before the unbind, and
+// the removal's own cleanup, later under s.mu, drops the entry, or it sees
+// the agent gone and the entry is dropped here. A busy report never
+// outlives the removal until SessionGrace lapses, where a later agent
+// joined under the name would show it.
+func (s *Server) setHostStatus(ctx context.Context, agent, sess string, busy bool, now time.Time) {
+	e := hostStatusEntry{busy: busy, at: now}
 	s.mu.Lock()
-	m := s.hostStatus[name]
+	m := s.hostStatus[agent]
 	if m == nil {
 		m = map[string]hostStatusEntry{}
-		s.hostStatus[name] = m
+		s.hostStatus[agent] = m
 	}
-	m[sess] = hostStatusEntry{busy: in.Busy, at: now}
+	m[sess] = e
 	s.mu.Unlock()
-	w.WriteHeader(http.StatusNoContent)
+	if s.isAgent(ctx, agent) {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if m := s.hostStatus[agent]; m != nil && m[sess] == e {
+		delete(m, sess)
+		if len(m) == 0 {
+			delete(s.hostStatus, agent)
+		}
+	}
 }
 
 // hostBusy reports whether any of agent's sessions has a live busy report,
