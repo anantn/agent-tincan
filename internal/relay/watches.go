@@ -44,7 +44,13 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, errors.New("unknown agent"))
 		return
 	}
+	// The store checks both agents again in the insert's transaction, so an
+	// admin removal since the check above leaves no watch behind.
 	wt, created, err := s.store.AddWatch(r.Context(), name, in.Agent, WatchTTL)
+	if errors.Is(err, store.ErrNoAgent) {
+		writeErr(w, http.StatusNotFound, errors.New("unknown agent"))
+		return
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return

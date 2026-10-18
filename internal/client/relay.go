@@ -708,8 +708,10 @@ func (r *Relay) Watch(ctx context.Context, agent string) (WatchResult, error) {
 }
 
 // HandbackResult is what the relay did with a handed-back request:
-// Outcome HandbackMoved, to the teammate To, or HandbackRequeued, back on
-// the caller's queue and not delivered again before Until.
+// Outcome HandbackMoved, to the teammate To, HandbackRequeued, back on
+// the caller's queue and not delivered again before Until, or
+// HandbackFailed, closed failed by the relay because Until is after the
+// request would expire (the asker has been told).
 type HandbackResult struct {
 	Outcome string    `json:"outcome"`
 	To      string    `json:"to,omitempty"`
@@ -720,6 +722,7 @@ type HandbackResult struct {
 const (
 	HandbackMoved    = "moved"
 	HandbackRequeued = "requeued"
+	HandbackFailed   = "failed"
 )
 
 // ErrHandbackUnsupported means the relay predates handbacks: the web agent

@@ -143,6 +143,42 @@ func TestHoldBack(t *testing.T) {
 	}
 }
 
+// FailHeld closes an ask only in the state HoldBack would hold it from:
+// queued, or for a handback under its target's live claim.
+func TestFailHeld(t *testing.T) {
+	s, c := open(t, ":memory:")
+	ctx := context.Background()
+	failed := envelope.Reply{Status: envelope.StatusFailed, Body: "limited"}
+	claimed := ask(t, s, "codex", "claude-web", "claimed")
+	if _, err := s.Claim(ctx, claimed.ID, "claude-web", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.FailHeld(ctx, claimed.ID, "claude-web", false, failed); !errors.Is(err, ErrWrongState) {
+		t.Fatalf("claimed ask failed as queued: %v", err)
+	}
+	if _, err := s.FailHeld(ctx, claimed.ID, "claude-web", true, failed); err != nil {
+		t.Fatalf("handback under a live claim: %v", err)
+	}
+	lapsed := ask(t, s, "codex", "claude-web", "lapsed")
+	if _, err := s.Claim(ctx, lapsed.ID, "claude-web", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	c.advance(2 * time.Minute)
+	if _, err := s.FailHeld(ctx, lapsed.ID, "claude-web", true, failed); !errors.Is(err, ErrWrongState) {
+		t.Fatalf("handback with a lapsed claim: %v", err)
+	}
+	queued := ask(t, s, "codex", "claude-web", "queued")
+	if _, err := s.FailHeld(ctx, queued.ID, "gemini-web", false, failed); !errors.Is(err, ErrWrongState) {
+		t.Fatalf("failed as a non-target: %v", err)
+	}
+	if _, err := s.FailHeld(ctx, queued.ID, "claude-web", false, failed); err != nil {
+		t.Fatal(err)
+	}
+	if _, st, err := s.Request(ctx, queued.ID); err != nil || st != envelope.StatusFailed {
+		t.Fatalf("status = %v, %v", st, err)
+	}
+}
+
 // MoveCandidates lists a target's queued asks and whether each was ever
 // claimed (it may then have been typed into a site already).
 func TestMoveCandidates(t *testing.T) {

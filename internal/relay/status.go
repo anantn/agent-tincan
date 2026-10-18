@@ -1,10 +1,13 @@
 package relay
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/mvanhorn/agent-tincan/internal/identity"
 
 	"github.com/mvanhorn/agent-tincan/internal/client"
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
@@ -115,26 +118,70 @@ func (s *Server) handleHostStatus(w http.ResponseWriter, r *http.Request) {
 	if err == nil && sess == "" {
 		err = errors.New("a host status needs a session header")
 	}
-	var in struct {
-		Busy bool `json:"busy"`
-	}
-	if err == nil {
-		err = decodeOne(r.Body, &in, "host status object")
-	}
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	now := s.cfg.Now()
+	// The binding that passed authentication, read before the body, which
+	// a slow client can hold open across a removal and a rejoin.
+	bound, found, err := s.dir.Agent(r.Context(), name)
+	if err == nil && !found {
+		err = identity.ErrUnknownAgent
+	}
+	if err != nil {
+		writeErr(w, statusFor(err), err)
+		return
+	}
+	var in struct {
+		Busy bool `json:"busy"`
+	}
+	if err := decodeOne(r.Body, &in, "host status object"); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	s.setHostStatus(r.Context(), bound, sess, in.Busy, s.cfg.Now())
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// setHostStatus files the session's host report for bound, the binding
+// that passed authentication, unless bound no longer holds its name: the
+// agent was removed, or removed and joined again (a new JoinedAt or node).
+// An admin removal can land after the caller was authenticated: the
+// removal unbinds the agent and then, under s.mu, drops its host status.
+// So the report is written under s.mu first and the binding checked
+// after. Either the check runs before the unbind, and the removal's own
+// cleanup, later under s.mu, drops the entry, or it sees the binding gone
+// and the entry is dropped here. A busy report never outlives its binding
+// until SessionGrace lapses, where a later agent joined under the name
+// would show it.
+func (s *Server) setHostStatus(ctx context.Context, bound identity.Agent, sess string, busy bool, now time.Time) {
+	agent := bound.Name
+	e := hostStatusEntry{busy: busy, at: now}
 	s.mu.Lock()
-	m := s.hostStatus[name]
+	m := s.hostStatus[agent]
 	if m == nil {
 		m = map[string]hostStatusEntry{}
-		s.hostStatus[name] = m
+		s.hostStatus[agent] = m
 	}
-	m[sess] = hostStatusEntry{busy: in.Busy, at: now}
+	m[sess] = e
 	s.mu.Unlock()
-	w.WriteHeader(http.StatusNoContent)
+	if cur, found, err := s.dir.Agent(ctx, agent); err == nil && found && sameBinding(cur, bound) {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if m := s.hostStatus[agent]; m != nil && m[sess] == e {
+		delete(m, sess)
+		if len(m) == 0 {
+			delete(s.hostStatus, agent)
+		}
+	}
+}
+
+// sameBinding reports whether a and b are one join of one name on one
+// node, to the millisecond the store keeps JoinedAt.
+func sameBinding(a, b identity.Agent) bool {
+	return a.Name == b.Name && a.NodeID == b.NodeID && a.JoinedAt.UnixMilli() == b.JoinedAt.UnixMilli()
 }
 
 // hostBusy reports whether any of agent's sessions has a live busy report,

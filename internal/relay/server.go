@@ -1334,13 +1334,20 @@ func (s *Server) handleReply(w http.ResponseWriter, r *http.Request) {
 // (store.ReplyByEmail) and audited with via "email"; its tag, sender and
 // text never reach the audit log.
 func (s *Server) recordReply(ctx context.Context, id, agent string, rep envelope.Reply, emailMessageID string, round int) (envelope.Reply, error) {
+	return s.recordReplyWith(ctx, id, agent, rep, emailMessageID != "", func(rep envelope.Reply) (envelope.Reply, error) {
+		if emailMessageID == "" {
+			return s.store.Reply(ctx, id, agent, rep)
+		}
+		return s.store.ReplyByEmail(ctx, emailMessageID, id, agent, round, rep)
+	})
+}
+
+// recordReplyWith is recordReply with the store write given as write, for
+// a reply that needs its own conditions checked in the write's transaction
+// (failOutlivedHold). byEmail audits it with via "email".
+func (s *Server) recordReplyWith(ctx context.Context, id, agent string, rep envelope.Reply, byEmail bool, write func(envelope.Reply) (envelope.Reply, error)) (envelope.Reply, error) {
 	rep.NoMirror = !s.mayMirror(ctx, id, agent)
-	var err error
-	if emailMessageID == "" {
-		rep, err = s.store.Reply(ctx, id, agent, rep)
-	} else {
-		rep, err = s.store.ReplyByEmail(ctx, emailMessageID, id, agent, round, rep)
-	}
+	rep, err := write(rep)
 	if err != nil {
 		return envelope.Reply{}, err
 	}
@@ -1351,7 +1358,7 @@ func (s *Server) recordReply(ctx context.Context, id, agent string, rep envelope
 		event = "needs_input"
 		detail = map[string]any{"question_bytes": len(rep.Body)}
 	}
-	if emailMessageID != "" {
+	if byEmail {
 		detail["via"] = "email"
 	}
 	s.record(ctx, event, id, "", agent, store.DetailJSON(detail))

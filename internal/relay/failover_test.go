@@ -609,3 +609,130 @@ func TestFailoverSweepSpreadsAsks(t *testing.T) {
 		t.Fatalf("asks went %v, want two each to muse and scribe", took)
 	}
 }
+
+// A hold that ends before the ask expires (the 24h default) holds it as
+// before; one that would end after fails it at once, with a failed reply
+// that tells the asker why, instead of letting it lapse unsent.
+func TestFailoverHoldVersusExpiry(t *testing.T) {
+	t.Run("short hold", func(t *testing.T) {
+		h, clk := failoverHarness(t)
+		limitAt(h, clk, museAddr, 48*time.Hour)
+		limitAt(h, clk, grokAddr, 23*time.Hour)
+		sent := h.send(instinctAddr, "grokbot", "summarize this paper")
+		res := getAs(h, instinctAddr, sent.ID)
+		if res.Status != envelope.StatusQueued || res.Reply != nil || res.RelayNote == nil || !strings.Contains(res.RelayNote.Note, "it waits") {
+			t.Fatalf("asker sees %+v", res)
+		}
+	})
+	t.Run("long hold", func(t *testing.T) {
+		h, clk := failoverHarness(t)
+		limitAt(h, clk, museAddr, 48*time.Hour)
+		until := limitAt(h, clk, grokAddr, 30*time.Hour)
+		sent := h.send(instinctAddr, "grokbot", "summarize this paper")
+		res := getAs(h, instinctAddr, sent.ID)
+		want := "grokbot is out of messages until " + client.UTCClock(until, clk.Now()) + ", after this ask would expire; ask another teammate or re-ask after the reset"
+		if res.Status != envelope.StatusFailed || res.Reply == nil || !strings.Contains(res.Reply.Body, want) {
+			t.Fatalf("asker sees %+v", res)
+		}
+		if n := relayNotices(h, "instinct"); len(n) != 0 {
+			t.Fatalf("a wait note went out too: %+v", n)
+		}
+		if a := auditEvents(h, "limit_outlives"); len(a) != 1 || a[0].RequestID != sent.ID {
+			t.Fatalf("limit_outlives audit = %+v", a)
+		}
+	})
+	t.Run("long handback", func(t *testing.T) {
+		h, clk := failoverHarness(t)
+		limitAt(h, clk, museAddr, 48*time.Hour)
+		sent := h.send(instinctAddr, "grokbot", "summarize this paper")
+		h.do(grokAddr, "POST", "/v1/requests/"+sent.ID+"/claim", "", http.StatusOK, nil)
+		until := limitAt(h, clk, grokAddr, 30*time.Hour)
+		out := handback(h, grokAddr, sent.ID, until, http.StatusOK)
+		if out.Outcome != client.HandbackFailed {
+			t.Fatalf("handback = %+v", out)
+		}
+		if res := getAs(h, instinctAddr, sent.ID); res.Status != envelope.StatusFailed || res.Reply == nil || !strings.Contains(res.Reply.Body, "after this ask would expire") {
+			t.Fatalf("asker sees %+v", res)
+		}
+	})
+	t.Run("limit extended past expiry", func(t *testing.T) {
+		h, clk := failoverHarness(t)
+		limitAt(h, clk, museAddr, 48*time.Hour)
+		limitAt(h, clk, grokAddr, time.Hour)
+		sent := h.send(instinctAddr, "grokbot", "summarize this paper")
+		if res := getAs(h, instinctAddr, sent.ID); res.Status != envelope.StatusQueued {
+			t.Fatalf("not held: %+v", res)
+		}
+		limitAt(h, clk, grokAddr, 30*time.Hour)
+		h.srv.Sweep(t.Context())
+		if res := getAs(h, instinctAddr, sent.ID); res.Status != envelope.StatusFailed || res.Reply == nil || !strings.Contains(res.Reply.Body, "after this ask would expire") {
+			t.Fatalf("asker sees %+v", res)
+		}
+	})
+}
+
+// A hold the old relay saved past the ask's expiry, with the reported reset
+// unchanged since, still fails the ask on the next sweep instead of letting
+// it lapse unsent.
+func TestFailoverSweepFailsSavedLongHold(t *testing.T) {
+	h, clk := failoverHarness(t)
+	limitAt(h, clk, museAddr, 48*time.Hour)
+	limitAt(h, clk, grokAddr, time.Hour)
+	sent := h.send(instinctAddr, "grokbot", "summarize this paper")
+	if res := getAs(h, instinctAddr, sent.ID); res.Status != envelope.StatusQueued {
+		t.Fatalf("not held: %+v", res)
+	}
+	until := clk.Now().Add(30 * time.Hour).UTC().Truncate(time.Millisecond)
+	if _, err := h.st.HoldBack(t.Context(), sent.ID, "grokbot", until, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := limitAt(h, clk, grokAddr, 30*time.Hour); !got.Equal(until) {
+		t.Fatalf("limit until %v, hold until %v", got, until)
+	}
+	h.srv.Sweep(t.Context())
+	if res := getAs(h, instinctAddr, sent.ID); res.Status != envelope.StatusFailed || res.Reply == nil || !strings.Contains(res.Reply.Body, "after this ask would expire") {
+		t.Fatalf("asker sees %+v", res)
+	}
+}
+
+// Failing an ask whose hold would outlive it keeps HoldBack's conditions:
+// an ask its target claimed after failover read it as queued, or a
+// handback whose claim lapsed meanwhile, is left alone with ErrWrongState.
+func TestFailOutlivedHoldSparesChangedAsk(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		claimed bool
+	}{{"claimed after the read", false}, {"handback lease lapsed", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, clk := failoverHarness(t)
+			ctx := t.Context()
+			limitAt(h, clk, museAddr, 48*time.Hour)
+			sent := h.send(instinctAddr, "grokbot", "summarize this paper")
+			stale, _, err := h.st.Request(ctx, sent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.do(grokAddr, "POST", "/v1/requests/"+sent.ID+"/claim", "", http.StatusOK, nil)
+			if tc.claimed {
+				if stale, _, err = h.st.Request(ctx, sent.ID); err != nil {
+					t.Fatal(err)
+				}
+				clk.advance(DefaultClaimLease + time.Second)
+			}
+			until := limitAt(h, clk, grokAddr, 30*time.Hour)
+			f, _, err := h.srv.failoverFacts(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.srv.failover(ctx, stale, f, until, time.Time{}, tc.claimed); !errors.Is(err, store.ErrWrongState) {
+				t.Fatalf("failover = %v, want ErrWrongState", err)
+			}
+			if res := getAs(h, instinctAddr, sent.ID); res.Reply != nil || res.Status == envelope.StatusFailed {
+				t.Fatalf("asker sees %+v", res)
+			}
+			if a := auditEvents(h, "limit_outlives"); len(a) != 0 {
+				t.Fatalf("limit_outlives audit = %+v", a)
+			}
+		})
+	}
+}

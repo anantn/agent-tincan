@@ -152,6 +152,44 @@ func (s *Store) HoldBack(ctx context.Context, id, agent string, until time.Time,
 	return req, err
 }
 
+// FailHeld closes request id, which agent's limit would hold back past its
+// expiry, with agent's terminal reply rep, but only while it is in the
+// state HoldBack would hold it from: queued (claimed false), or claimed by
+// agent under a live claim (claimed true, a handback). It returns
+// ErrWrongState when the request left that state, such as an ask its
+// target claimed after the caller read it as queued.
+func (s *Store) FailHeld(ctx context.Context, id, agent string, claimed bool, rep envelope.Reply) (envelope.Reply, error) {
+	if !rep.Status.Terminal() {
+		return envelope.Reply{}, ErrWrongState
+	}
+	now := s.now().UnixMilli()
+	guard, args := `status = 'queued' AND expires_at > ?`, []any{now}
+	if claimed {
+		guard, args = `status = 'claimed' AND lease_until > ? AND expires_at > ?`, []any{now, now}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return envelope.Reply{}, err
+	}
+	defer tx.Rollback()
+	if rep, err = s.replyTx(ctx, tx, id, agent, rep, guard, args...); err != nil {
+		return envelope.Reply{}, err
+	}
+	return rep, tx.Commit()
+}
+
+// RequestExpiry is when request id expires.
+func (s *Store) RequestExpiry(ctx context.Context, id string) (time.Time, error) {
+	var ms int64
+	if err := s.db.QueryRowContext(ctx, `SELECT expires_at FROM requests WHERE id = ?`, id).Scan(&ms); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return time.Time{}, ErrNotFound
+		}
+		return time.Time{}, err
+	}
+	return time.UnixMilli(ms), nil
+}
+
 // ClaimLapsed reports whether any claim on request id ever ran out of
 // lease. Its claimant may have typed the ask into a site before it went
 // quiet, so a later claimant handing it back cannot vouch that it is

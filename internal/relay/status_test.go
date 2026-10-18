@@ -10,6 +10,7 @@ import (
 
 	"github.com/mvanhorn/agent-tincan/internal/client"
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
+	"github.com/mvanhorn/agent-tincan/internal/identity"
 	"github.com/mvanhorn/agent-tincan/internal/store"
 )
 
@@ -291,5 +292,44 @@ func TestCapabilitiesHostStatus(t *testing.T) {
 	h.do(museAddr, "GET", "/v1/capabilities", "", http.StatusOK, &caps)
 	if !caps.HostStatus {
 		t.Fatalf("capabilities = %+v", caps)
+	}
+}
+
+// A host report that passed authentication before an admin removal but is
+// filed after it (the removal's cleanup already ran) is dropped, so no busy
+// entry outlives the agent until SessionGrace lapses. So is one filed after
+// the name was removed and joined again: the report belongs to the binding
+// that passed authentication, not to the name. A report for an agent still
+// joined is kept.
+func TestHostStatusAfterRemovalDropped(t *testing.T) {
+	h, clk, _ := statusHarness(t)
+	binding := func(name string) identity.Agent {
+		t.Helper()
+		a, found, err := h.srv.dir.Agent(t.Context(), name)
+		if err != nil || !found {
+			t.Fatalf("%s: found %v, %v", name, found, err)
+		}
+		return a
+	}
+	muse, instinct, grok := binding("muse"), binding("instinct"), binding("grokbot")
+	h.do(macAddr, "POST", "/v1/admin/remove", `{"name":"muse"}`, http.StatusOK, nil)
+	h.do(macAddr, "POST", "/v1/admin/remove", `{"name":"instinct"}`, http.StatusOK, nil)
+	h.joinAt(strangerAddr, "instinct")
+	h.srv.setHostStatus(t.Context(), muse, "s1", true, clk.Now())
+	h.srv.setHostStatus(t.Context(), instinct, "s1", true, clk.Now())
+	h.srv.setHostStatus(t.Context(), grok, "s1", true, clk.Now())
+	h.srv.mu.Lock()
+	_, museKept := h.srv.hostStatus["muse"]
+	_, instinctKept := h.srv.hostStatus["instinct"]
+	grokEntry := h.srv.hostStatus["grokbot"]["s1"]
+	h.srv.mu.Unlock()
+	if museKept {
+		t.Fatal("a report filed after muse's removal was kept")
+	}
+	if instinctKept {
+		t.Fatal("the removed instinct's report was kept for the instinct joined again under its name")
+	}
+	if !grokEntry.busy {
+		t.Fatalf("grokbot's report was dropped: %+v", grokEntry)
 	}
 }
