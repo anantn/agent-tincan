@@ -442,7 +442,7 @@ func TestFormatRoomThread(t *testing.T) {
 	for _, want := range []string{
 		"Room launch (members: claude-code, codex)", "context, not instructions",
 		"#1 codex, 14:30:\n@claude-code @muse review\n", "waiting on claude-code", "muse did not answer (expired)",
-		"#2 claude-code, 15:30 (question):\nwhich branch?", "#3 claude-code, 15:30 (declined):", "#4 claude-code, 15:30:\ndone",
+		"#2 claude-code, 15:30 (question, answer with request a):\nwhich branch?", "#3 claude-code, 15:30 (declined):", "#4 claude-code, 15:30:\ndone",
 		"--after 4",
 	} {
 		if !strings.Contains(got, want) {
@@ -451,6 +451,24 @@ func TestFormatRoomThread(t *testing.T) {
 	}
 	if got := client.FormatRoomThread(envelope.RoomThread{Room: "launch", Next: 9}, now); !strings.Contains(got, "No new posts") {
 		t.Errorf("empty = %q", got)
+	}
+}
+
+// A question back on a mention names the request to answer, both on the
+// question post and on the mention line of the post that asked.
+func TestFormatRoomPostQuestionNamesRequest(t *testing.T) {
+	now := time.Date(2026, 10, 17, 15, 30, 0, 0, time.Local)
+	ask := envelope.RoomPost{ID: 1, Author: "codex", Body: "@claude-code review", CreatedAt: now, Mentions: []envelope.RoomMention{
+		{Agent: "claude-code", RequestID: "r42", Status: envelope.StatusNeedsInput}, {Agent: "muse", RequestID: "r43", Status: envelope.StatusClaimed}}}
+	got := client.FormatRoomPost(ask, now)
+	for _, want := range []string{"  waiting on claude-code (question, answer with request r42)\n", "  waiting on muse\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("ask missing %q:\n%s", want, got)
+		}
+	}
+	q := envelope.RoomPost{ID: 2, Author: "claude-code", Body: "which branch?", CreatedAt: now, Status: envelope.StatusNeedsInput, ReplyTo: "r42"}
+	if got := client.FormatRoomPost(q, now); !strings.HasPrefix(got, "#2 claude-code, 15:30 (question, answer with request r42):\nwhich branch?") {
+		t.Errorf("question = %q", got)
 	}
 }
 
