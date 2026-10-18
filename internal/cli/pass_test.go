@@ -12,6 +12,7 @@ import (
 	"github.com/mvanhorn/agent-tincan/internal/client"
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
 	"github.com/mvanhorn/agent-tincan/internal/history"
+	"github.com/mvanhorn/agent-tincan/internal/pass"
 	"github.com/mvanhorn/agent-tincan/internal/relay"
 	"github.com/mvanhorn/agent-tincan/internal/testrelay"
 )
@@ -47,16 +48,30 @@ func (p passReaderStub) Read(_ context.Context, q history.Query, _ history.Optio
 }
 
 // passMesh is a mesh with chatgpt-web (kind chatgpt-web) on muse's
-// machine and the owner's CLI joined as "owner". The owner's claude.ai
-// history holds convs; reads counts every history read.
+// machine and the owner's CLI joined as "owner", every agent running
+// pass.GuardVersion. The owner's claude.ai history holds convs; reads
+// counts every history read.
 func passMesh(t *testing.T, convs ...history.Conversation) (m *testrelay.Mesh, web *client.Relay, reads *int) {
 	t.Helper()
+	return passMeshAt(t, pass.GuardVersion, convs...)
+}
+
+// passMeshAt is passMesh with every agent running tincan version.
+func passMeshAt(t *testing.T, version string, convs ...history.Conversation) (m *testrelay.Mesh, web *client.Relay, reads *int) {
+	t.Helper()
+	oldVersion := client.Version
+	client.Version = version
+	t.Cleanup(func() { client.Version = oldVersion })
 	t.Setenv("TINCAN_RELAY", "")
 	t.Setenv("TINCAN_PROXY", "")
 	t.Setenv("HOME", t.TempDir())
 	m = testrelay.New(t, relay.Config{})
 	web = m.JoinOnMachineOf(t, "muse", "chatgpt-web")
 	if err := m.Client(t, "admin").SetKind(t.Context(), "chatgpt-web", "chatgpt-web"); err != nil {
+		t.Fatal(err)
+	}
+	// The destination calls the relay once, so the roster knows its build.
+	if _, err := web.Agents(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	m.JoinOnMachineOf(t, "admin", "owner")
@@ -177,5 +192,20 @@ func TestPassRefusals(t *testing.T) {
 	_, _, err = runSplit(t, passCmd(), "https://www.perplexity.ai/search/abc", "--to", "chatgpt-web")
 	if err == nil || !strings.Contains(err.Error(), "Perplexity") {
 		t.Fatalf("perplexity = %v", err)
+	}
+}
+
+// A destination running a build older than pass.GuardVersion is refused
+// before the chat is read, with the pass service's reason, so it never
+// receives a pass it does not record as passed.
+func TestPassRefusesOldDestination(t *testing.T) {
+	_, _, reads := passMeshAt(t, "0.17.0", claudeChat("abc-3", 3))
+	_, _, err := runSplit(t, passCmd(), "https://claude.ai/chat/abc-3", "--to", "chatgpt-web", "--wait", "1s")
+	want := "chatgpt-web runs tincan 0.17.0, which does not refuse agents' continuations of a passed chat. Upgrade it to " + pass.GuardVersion + " or later"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("old destination = %v, want %q", err, want)
+	}
+	if *reads != 0 {
+		t.Fatalf("history read %d times for an old destination", *reads)
 	}
 }

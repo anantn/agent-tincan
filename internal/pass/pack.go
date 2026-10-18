@@ -72,17 +72,25 @@ func Pack(c history.Conversation, budget int) (string, error) {
 	title := firstLine(c.Title)
 	build := func(kept []string, olderTexts, newestTexts []string) string {
 		var b strings.Builder
-		b.WriteString(history.NewChat + "\n" + fmt.Sprintf(framing, nonce) + "\n\n<<<CHAT " + nonce + ">>>\nTitle: " + title)
+		b.WriteString(history.NewChat + "\n" + fmt.Sprintf(framing, nonce) + "\n\n<<<CHAT " + nonce + ">>>")
+		// An untitled chat has no Title line; sep keeps one blank line
+		// between the sections that are there.
+		sep := "\n"
+		if title != "" {
+			b.WriteString(sep + "Title: " + title)
+			sep = "\n\n"
+		}
 		if len(lines) > 0 {
-			b.WriteString("\n\nEarlier prompts, first line only, oldest first:")
+			b.WriteString(sep + "Earlier prompts, first line only, oldest first:")
 			if left := len(lines) - len(kept); left > 0 {
 				fmt.Fprintf(&b, "\n(%d earlier prompts left out)", left)
 			}
 			for _, l := range kept {
 				b.WriteString("\n- " + l)
 			}
+			sep = "\n\n"
 		}
-		b.WriteString("\n\nRecent turns, verbatim:")
+		b.WriteString(sep + "Recent turns, verbatim:")
 		writeTurns(&b, older, olderTexts)
 		writeTurns(&b, newest, newestTexts)
 		b.WriteString("\n<<<END CHAT " + nonce + ">>>")

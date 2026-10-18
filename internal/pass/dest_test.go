@@ -54,12 +54,17 @@ type fakeReader struct {
 	src   history.Source
 	convs []history.Conversation
 	reads int
+	lists int
 	opts  history.Options
+	// untitledReads drops the title from a read, as Gemini's
+	// conversation read does: only its list carries titles.
+	untitledReads bool
 }
 
 func (f *fakeReader) Source() history.Source { return f.src }
 
 func (f *fakeReader) List(_ context.Context, count int, _ history.Options) (history.Page, error) {
+	f.lists++
 	var p history.Page
 	for _, c := range f.convs[:min(count, len(f.convs))] {
 		c.Messages = nil
@@ -73,6 +78,9 @@ func (f *fakeReader) Read(_ context.Context, q history.Query, opts history.Optio
 	f.opts = opts
 	for _, c := range f.convs {
 		if c.ID == q.ConversationID {
+			if f.untitledReads {
+				c.Title = ""
+			}
 			return history.Page{Conversations: []history.Conversation{c}}, nil
 		}
 	}
@@ -100,6 +108,28 @@ func TestReadLatestAndByID(t *testing.T) {
 	}
 	if _, err := Read(t.Context(), r, "missing", history.Window{}); !errors.Is(err, history.ErrNotFound) {
 		t.Fatalf("missing = %v", err)
+	}
+}
+
+// A conversation read that carries no title (Gemini's) takes the title
+// its list entry shows, both for the newest chat and for one named by id;
+// a titled read is not listed again.
+func TestReadKeepsListTitle(t *testing.T) {
+	newest, older := chat(2), chat(1)
+	newest.ID, newest.Title = "90cc9c331e93efa1", "Quick Ten-Question Reasoning Test"
+	older.ID, older.Title = "older", "Garden plan"
+	r := &fakeReader{src: history.SourceGemini, convs: []history.Conversation{newest, older}, untitledReads: true}
+	c, err := Read(t.Context(), r, "", history.Window{})
+	if err != nil || c.Title != "Quick Ten-Question Reasoning Test" {
+		t.Fatalf("newest = %q, %v", c.Title, err)
+	}
+	c, err = Read(t.Context(), r, "older", history.Window{})
+	if err != nil || c.Title != "Garden plan" {
+		t.Fatalf("by id = %q, %v", c.Title, err)
+	}
+	titled := &fakeReader{src: history.SourceChatGPT, convs: []history.Conversation{older}}
+	if c, err := Read(t.Context(), titled, "older", history.Window{}); err != nil || c.Title != "Garden plan" || titled.lists != 0 {
+		t.Fatalf("titled read = %q, %v, %d lists", c.Title, err, titled.lists)
 	}
 }
 

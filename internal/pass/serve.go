@@ -249,11 +249,8 @@ func (s *Service) send(ctx context.Context, req envelope.Request, r Request, ros
 		s.reply(ctx, req, "Nothing was passed: "+err.Error()+".", envelope.StatusFailed)
 		return "", ""
 	}
-	if v := versionOf(roster, r.To); !client.AtLeast(v, GuardVersion) {
-		if v == "" {
-			v = "an unknown build"
-		}
-		s.reply(ctx, req, fmt.Sprintf("Nothing was passed: %s runs tincan %s, which does not refuse agents' continuations of a passed chat. Upgrade it to %s or later (a release build) and restart it.", r.To, v, GuardVersion), envelope.StatusFailed)
+	if err := Guarded(roster, r.To); err != nil {
+		s.reply(ctx, req, "Nothing was passed: "+err.Error()+".", envelope.StatusFailed)
 		return "", ""
 	}
 
@@ -379,6 +376,20 @@ func lastUpdate(c history.Conversation) time.Time {
 // not one.
 func siteOf(roster []client.AgentInfo, to string) history.Source {
 	return agentSite(rosterAgent(roster, to))
+}
+
+// Guarded checks that the destination to runs GuardVersion or later, so
+// it refuses continuations of the chat a pass opens. The error says what
+// to upgrade.
+func Guarded(roster []client.AgentInfo, to string) error {
+	v := versionOf(roster, to)
+	if client.AtLeast(v, GuardVersion) {
+		return nil
+	}
+	if v == "" {
+		v = "an unknown build"
+	}
+	return fmt.Errorf("%s runs tincan %s, which does not refuse agents' continuations of a passed chat. Upgrade it to %s or later (a release build) and restart it", to, v, GuardVersion)
 }
 
 // versionOf is the build agent to last called the relay with.
