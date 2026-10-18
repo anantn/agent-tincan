@@ -34,6 +34,17 @@ func historyEnv(t *testing.T) (codexHome, claudeDir string) {
 	t.Setenv("CODEX_HOME", codexHome)
 	t.Setenv("CLAUDE_CONFIG_DIR", claudeDir)
 	t.Setenv("TINCAN_HISTORY_SCRATCH", "/Users/matt/.config/tincan/history-scratch")
+	// Keep every source off the machine's real history: the web sources
+	// (chatgpt, gemini, ...) reach live Chrome through the native host's
+	// socket, and the other CLI sources fall back to dirs under HOME.
+	isolated := filepath.Join(base, "home")
+	t.Setenv("TINCAN_HISTORY_NATIVE_DIR", filepath.Join(base, "native"))
+	t.Setenv("HOME", isolated)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(isolated, ".config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(isolated, ".local", "share"))
+	for _, env := range []string{"GEMINI_CLI_HOME", "GROK_HOME", "COPILOT_HOME", "CURSOR_CONFIG_DIR", "OPENCODE_DB", "TINCAN_CONFIG"} {
+		t.Setenv(env, "")
+	}
 	old := historyNow
 	historyNow = func() time.Time { return time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC) }
 	t.Cleanup(func() { historyNow = old })
