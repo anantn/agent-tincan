@@ -111,3 +111,29 @@ func TestPrunePushSubscriptions(t *testing.T) {
 		}
 	}
 }
+
+// The page registers on every open, so an unchanged registration still
+// counts as use: it refreshes updated_at, and the prune keeps that browser
+// over ones not opened since.
+func TestPrunePushSubscriptionsKeepsReopened(t *testing.T) {
+	s, c := open(t, ":memory:")
+	ctx := context.Background()
+	var ids []string
+	for i := range 3 {
+		c.t = c.t.Add(time.Minute)
+		sub, _, err := s.UpsertPushSubscription(ctx, PushSubscription{Endpoint: "https://web.push.apple.com/" + string(rune('a'+i)), P256dh: "k", Auth: "a", Device: "iphone", Node: "nPHONE"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, sub.ID)
+	}
+	c.t = c.t.Add(time.Minute)
+	again, created, err := s.UpsertPushSubscription(ctx, PushSubscription{Endpoint: "https://web.push.apple.com/a", P256dh: "k", Auth: "a", Device: "iphone", Node: "nPHONE"})
+	if err != nil || created || again.ID != ids[0] || !again.UpdatedAt.Equal(c.t) {
+		t.Fatalf("reopen = %+v %v %v", again, created, err)
+	}
+	dropped, err := s.PrunePushSubscriptions(ctx, "nPHONE", 2)
+	if err != nil || len(dropped) != 1 || dropped[0] != ids[1] {
+		t.Fatalf("dropped = %v %v, want [%s]", dropped, err, ids[1])
+	}
+}
