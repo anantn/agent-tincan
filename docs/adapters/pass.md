@@ -14,7 +14,7 @@ The source is a chat URL on ChatGPT, claude.ai, Grok, Gemini or Copilot (`copilo
 
 The chat is read through the Tincan Chrome extension on the machine you run the command on, the same way `tincan history` reads it, so run it on the Mac with Chrome and the extension (`tincan history install`). The seed goes to the destination as an ask from that machine's joined agent.
 
-The destination must be one of the six web chat teammates (`chatgpt-web`, `claude-web`, `grok-web`, `gemini-web`, `perplexity-web`, `copilot-web`), signed in to its site and not out of messages. Anything else, `dot-web` and coding agents included, is refused before the chat is read, with the reason.
+The destination must be one of the six web chat teammates (`chatgpt-web`, `claude-web`, `grok-web`, `gemini-web`, `perplexity-web`, `copilot-web`), signed in to its site, not out of messages, and running tincan 0.18.0 or later (a development build counts as older). Anything else, `dot-web` and coding agents included, is refused before the chat is read, with the reason.
 
 The command waits for the destination to open the chat (`--wait`, 10 minutes by default) and prints the conversation it opened, for example `Passed to chatgpt-web. ChatGPT conversation: 68f0...`. Open it in the browser and carry on there. It prints nothing of the destination's answer.
 

@@ -196,3 +196,21 @@ func TestBudgetPerSite(t *testing.T) {
 		t.Fatalf("claude.ai budget %d is not below the default %d", Budget(history.SourceClaudeAI), history.MaxSendMessage)
 	}
 }
+
+// A chat with no title packs no "Title:" line at all.
+func TestUntitledChatOmitsTitleLine(t *testing.T) {
+	c := chat(2)
+	c.Title = "  "
+	seed, err := Pack(c, history.MaxSendMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkSeed(t, seed, history.MaxSendMessage)
+	if strings.Contains(seed, "Title:") {
+		t.Fatalf("untitled seed has a Title line:\n%s", seed)
+	}
+	c.Title = "Trip planning"
+	if seed, _ = Pack(c, history.MaxSendMessage); !strings.Contains(seed, "\nTitle: Trip planning\n") {
+		t.Fatalf("titled seed:\n%s", seed)
+	}
+}

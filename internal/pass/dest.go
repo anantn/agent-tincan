@@ -76,6 +76,7 @@ func agentSite(a *client.AgentInfo) history.Source {
 func Read(ctx context.Context, r history.Reader, id string, w history.Window) (history.Conversation, error) {
 	src := r.Source()
 	newest := id == ""
+	listTitle := ""
 	if newest {
 		page, err := r.List(ctx, 1, history.Options{Window: w})
 		if err != nil {
@@ -84,7 +85,7 @@ func Read(ctx context.Context, r history.Reader, id string, w history.Window) (h
 		if len(page.Conversations) == 0 {
 			return history.Conversation{}, fmt.Errorf("no %s conversations to pass in the lookup window", history.SourceLabel(src))
 		}
-		id = page.Conversations[0].ID
+		id, listTitle = page.Conversations[0].ID, page.Conversations[0].Title
 	}
 	q := history.Query{Source: src, Mode: history.ModeConversation, ConversationID: id}
 	if err := q.Validate(); err != nil {
@@ -98,6 +99,15 @@ func Read(ctx context.Context, r history.Reader, id string, w history.Window) (h
 		return history.Conversation{}, history.ErrNotFound
 	}
 	c := page.Conversations[0]
+	// Some sites' conversation reads carry no title (Gemini's); only the
+	// list shows it.
+	if strings.TrimSpace(c.Title) == "" {
+		if newest {
+			c.Title = listTitle
+		} else {
+			c.Title = listedTitle(ctx, r, c.ID, w)
+		}
+	}
 	// Some lists (Copilot's) carry no dates, so the newest entry is checked
 	// against the window once the read has its times. A chat named by id
 	// is the owner's explicit choice and is not.
@@ -111,6 +121,32 @@ func Read(ctx context.Context, r history.Reader, id string, w history.Window) (h
 		}
 	}
 	return c, nil
+}
+
+// titleLookup is how many of the newest conversations listedTitle looks
+// through: one list request, past which a chat goes untitled.
+const titleLookup = 50
+
+// titleAge is the age limit listedTitle lists with. A chat named by id is
+// read whatever its age, so its title lookup is bounded by titleLookup
+// alone, not by the window's MaxAge.
+const titleAge = 100 * 365 * 24 * time.Hour
+
+// listedTitle is the title the list shows for conversation id, "" when it
+// is not among the titleLookup newest or the list fails: a title is worth
+// one list request, never a failed pass.
+func listedTitle(ctx context.Context, r history.Reader, id string, w history.Window) string {
+	w.MaxAge = titleAge
+	page, err := r.List(ctx, titleLookup, history.Options{Window: w, All: true})
+	if err != nil {
+		return ""
+	}
+	for _, c := range page.Conversations {
+		if c.ID == id {
+			return c.Title
+		}
+	}
+	return ""
 }
 
 // footerID is a conversation id as a web agent's footer prints it.

@@ -38,8 +38,8 @@ func passCmd() *cobra.Command {
 			"first line of each earlier prompt and the last 6 turns verbatim, cut to fit the destination's message cap),\n" +
 			"and asks the destination web chat teammate, as this agent, to open a new chat with it. It prints the\n" +
 			"conversation the destination opened; continue it in the browser.\n\n" +
-			"The destination must be one of the six web chat teammates, signed in and not out of messages; anything\n" +
-			"else is refused before the chat is read. The chat goes to the destination's vendor. See docs/adapters/pass.md.",
+			"The destination must be one of the six web chat teammates, signed in, not out of messages and running\n" +
+			"tincan " + pass.GuardVersion + " or later; anything else is refused before the chat is read. The chat goes to the destination's vendor. See docs/adapters/pass.md.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if to == "" {
@@ -61,6 +61,9 @@ func passCmd() *cobra.Command {
 			dst, err := pass.Destination(roster, to, time.Now())
 			if err != nil {
 				return err
+			}
+			if err := pass.Guarded(roster, to); err != nil {
+				return fmt.Errorf("nothing was passed: %w", err)
 			}
 			rd, ok := passReader(src)
 			if !ok {
