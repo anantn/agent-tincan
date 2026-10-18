@@ -431,10 +431,7 @@ func (w *WebAgent) Handle(ctx context.Context, req envelope.Request) {
 		w.reply(ctx, req, fmt.Sprintf("Nothing was sent to %s: the %s agent keeps no list of passed chats, so it cannot take a pass.", label, w.Name), envelope.StatusFailed, nil)
 		return
 	}
-	if len(wr.message) > MaxSendMessage {
-		w.reply(ctx, req, fmt.Sprintf("Nothing was sent to %s: the message is %d bytes, over the %d byte limit.", label, len(wr.message), MaxSendMessage), envelope.StatusFailed, nil)
-		return
-	}
+	wr.message = fmt.Sprintf("[tincan request %s from %s]\n%s", req.ID, req.From, wr.message)
 
 	// 3. Send, one request at a time. A request already in the journal
 	// was sent before (the relay requeued it after a lost reply or a
@@ -455,6 +452,9 @@ func (w *WebAgent) Handle(ctx context.Context, req envelope.Request) {
 		j = w.loadJournal()
 	}
 	if e, ok := j.Requests[req.ID]; ok {
+		if !e.Provenance {
+			_, wr.message, _ = strings.Cut(wr.message, "\n")
+		}
 		if e.State == webSendIntent {
 			if images {
 				if confirmed, ok := w.reconcileInput(ctx, wr.message, req.Attachments, e); ok {
@@ -471,6 +471,10 @@ func (w *WebAgent) Handle(ctx context.Context, req envelope.Request) {
 			return
 		}
 		w.resume(ctx, req, wr, e)
+		return
+	}
+	if len(wr.message) > MaxSendMessage {
+		w.reply(ctx, req, fmt.Sprintf("Nothing was sent to %s: the message is %d bytes, over the %d byte limit.", label, len(wr.message), MaxSendMessage), envelope.StatusFailed, nil)
 		return
 	}
 	if images {
@@ -537,7 +541,7 @@ func (w *WebAgent) Handle(ctx context.Context, req envelope.Request) {
 		}
 		send := func() (SendResult, error) {
 			return w.Native.sendImages(ctx, w.Site, OpArgs{Message: wr.message, ConversationID: convID, NewChat: newChat}, files, func() error {
-				e := webSend{ConversationID: convID, PrevUserID: anchor.prevUser, Recorded: time.Now().UTC(), SubmittedAt: time.Now().UTC(), State: webSendIntent, Input: true}
+				e := webSend{ConversationID: convID, PrevUserID: anchor.prevUser, Recorded: time.Now().UTC(), SubmittedAt: time.Now().UTC(), State: webSendIntent, Input: true, Provenance: true}
 				if err := w.journalStrict(req.ID, e); err != nil {
 					return errors.New("could not record image send intent; nothing was submitted")
 				}
@@ -610,7 +614,7 @@ func (w *WebAgent) Handle(ctx context.Context, req envelope.Request) {
 	if id := res.MessageID; id != "" && len(id) <= 128 && !strings.ContainsFunc(id, unicode.IsControl) {
 		anchor.bound = id
 	}
-	entry := webSend{ConversationID: res.ConversationID, PrevUserID: anchor.prevUser, SubmittedAt: anchor.since, UserMessageID: anchor.bound, Recorded: time.Now().UTC(), State: webSendSent, Input: images}
+	entry := webSend{ConversationID: res.ConversationID, PrevUserID: anchor.prevUser, SubmittedAt: anchor.since, UserMessageID: anchor.bound, Recorded: time.Now().UTC(), State: webSendSent, Input: images, Provenance: true}
 	if images {
 		if err := w.journalStrict(req.ID, entry); err != nil {
 			w.reply(ctx, req, "The image message was submitted, but its confirmation could not be saved. Do not retry automatically; inspect the conversation.", envelope.StatusFailed, nil)

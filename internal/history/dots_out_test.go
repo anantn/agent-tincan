@@ -587,7 +587,7 @@ func TestDotOutWaitsForAnInboundRequest(t *testing.T) {
 	// that lands after the wait released the lock, before this loop saw
 	// it end, may already have typed muse's reply; either way it is typed
 	// after the inbound message, exactly once.
-	if got := r.typed(); len(got) < 2 || got[1] != "what is on today?" {
+	if got := r.typed(); len(got) < 2 || got[1] != "[tincan request "+in.ID+" from codex]\nwhat is on today?" {
 		t.Fatalf("typed %q", got)
 	}
 	r.tick()

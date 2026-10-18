@@ -42,8 +42,8 @@ const maxRequestEmailBody = 64 << 10
 // with include_requests on, and a relay that can list its open asks and
 // mint their tags.
 func (w *Waker) mailsRequests(agent string) bool {
-	t, ok := w.cfg[agent]
-	return ok && t.Method == Email && t.IncludeRequests && w.opts.OpenAsks != nil && w.opts.RequestTag != nil
+	t := w.target(agent)
+	return t.Method == Email && t.IncludeRequests && w.opts.OpenAsks != nil && w.opts.RequestTag != nil
 }
 
 // armMail schedules agent's mail-only nudge on the debounce, unless one is
@@ -115,7 +115,7 @@ func (w *Waker) sendRequestMails(ctx context.Context, agent string, p *nudge, re
 	// Moves the silent episode on as any wake does; request emails still go
 	// on the primary path.
 	w.pathStep(agent, p.followUp)
-	cfg := w.cfg[agent]
+	cfg := w.target(agent)
 	// Read before the wake is marked in flight, as in deliver.
 	detailOthers, detailReplies, ids := w.mailedIDs(agent, p, asks, picked, others, replies)
 	if w.audit != nil {

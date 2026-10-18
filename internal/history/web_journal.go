@@ -29,6 +29,8 @@ const (
 )
 
 type webSend struct {
+	// Provenance records whether this send included the relay identity marker.
+	Provenance     bool   `json:"provenance,omitempty"`
 	Input          bool   `json:"input,omitempty"`
 	ConversationID string `json:"conversation_id"`
 	// UserMessageID is this request's user message, once seen.

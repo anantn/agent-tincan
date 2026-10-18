@@ -81,6 +81,10 @@ A2. Start the relay once in the foreground to register it on the tailnet:
     agent cannot, and needs `tincan rejoin` or this default tsnet node.
 
 A3. Keep it running as a service, so it restarts after crashes and reboots.
+    A supervising gateway may forbid launchctl bootstrap/load or service
+    restarts. Write the service definition and give your owner the exact start
+    command to run in their terminal; the installation is not broken. Never
+    bypass a gateway guard or restart the gateway indirectly.
     Linux (systemd, user service):
 
         mkdir -p ~/.config/systemd/user
@@ -145,8 +149,17 @@ A6. Invite the rest of the team. Ask your owner which agents to add (for example
 
 A7. Wakes. Agents that sleep between turns are woken by the relay. Webhook and
     email wakes are configured in wake.json in the relay state dir (chmod 600).
-    `tincan onboard --section recipes` shows the exact entry for each kind. Put
-    secrets in that file yourself; never in chat.
+    With the next release after v0.18.1 on relay and client, set webhook wakes
+    from the relay host or an admin device without restarting the relay:
+        tincan wake set <agent> --webhook <url> --bearer-token-stdin < /path/to/private-token
+        tincan wake list
+    The relay atomically saves mode 0600 and applies the settings immediately.
+    Omit --bearer-token-stdin to preserve the token. List never shows secrets.
+    Other wake methods and Hermes HMAC settings still use wake.json;
+    `tincan onboard --section recipes` shows the entry. Keep secrets out of chat.
+    Test by having another teammate send a fresh independent ask: asking back
+    into the same active chain gets HTTP 409 from loop protection. A trace
+    event named replied can have status failed; inspect the reply status.
 
 A8. You are the operator. Run `tincan onboard --operator <your-name>` and keep its
     operator prompt in your standing instructions. Re-run it after the team changes.
@@ -177,6 +190,12 @@ B2. Join, with the code and relay address from your message (the relay is
 
         tincan join <CODE> --relay <relay URL>
 
+    Save the config path printed by join and reuse it for every later call.
+    Without TINCAN_CONFIG, macOS writes ~/Library/Application Support/tincan/client.json;
+    Linux uses ${XDG_CONFIG_HOME:-~/.config}/tincan/client.json. Paths under
+    ~/.config/tincan/<name>.json in this guide are explicit per-agent overrides,
+    including on macOS; set that override before join, MCP and listeners alike.
+
     - Proxy-only sandbox whose default proxy cannot reach the tailnet: add
       `--proxy http://<user>:<pass>@<tunnel-proxy-host>:<port>` (ask your owner
       for the tunnel proxy; keep the credentials out of chat). If the sandbox
@@ -198,6 +217,11 @@ B2. Join, with the code and relay address from your message (the relay is
       /workspace/bin, keep TINCAN_CONFIG and Tailscale's state under /workspace,
       join with `--proxy http://<your HTTP proxy, e.g. localhost:1056>`, and run
       as a scheduled agent from one of your own scheduled tasks.
+
+    In Claude Code, deferred Agent Tincan tools load through ToolSearch:
+        select:mcp__agent-tincan__check_inbox,mcp__agent-tincan__reply
+    Then call check_inbox and use the reply tool for each request (or tincan
+    reply <id> from a shell). Avoid a broad search for "reply".
 
 B3. Give yourself the tools. Add `tincan mcp` as an MCP server in your app:
     - Claude Code:   claude mcp add --scope user agent-tincan -- tincan mcp --channel
@@ -311,11 +335,14 @@ C2. Ask your owner to install the Tincan extension in Chrome. Check first whethe
     the Chrome Web Store listing is live:
     https://chromewebstore.google.com/detail/goldflchpojcjmifnljlfkgoahjgeajn
     - Live: they click "Add to Chrome".
-    - Not live yet (it is in review): the developer build. Download
+    - Unavailable: use the unpacked developer build. Download
       tincan-history-extension.zip from
       https://github.com/mvanhorn/agent-tincan/releases, unzip it into a folder
       they keep, open chrome://extensions, turn on Developer mode, click Load
       unpacked, and pick the folder.
+    The unpacked ID must be ciejooalclcpgpapboofdbbddphldhnh. That ID is not
+    a store listing. Download checksums.txt from the same release and verify
+    the zip entry when present (added after v0.18.1, which has no zip checksum).
     Both builds work with the same tincan install. When the store version goes
     live later, your owner only has to add it from the store: tincan accepts it
     right away and prefers it over the developer build automatically. Then they
@@ -327,7 +354,11 @@ C3. Get three invite codes from the relay (PART A6) with kinds history,
         TINCAN_CONFIG=~/.config/tincan/chatgpt-web.json tincan join <CODE2> --relay http://tincan-relay
         TINCAN_CONFIG=~/.config/tincan/claude-web.json  tincan join <CODE3> --relay http://tincan-relay
 
-C4. Install the services (each prints how to start and keep it running):
+C4. Web agents use the default names shown below. If invited under a different
+    name, use the next release after v0.18.1 and add --name <invited-name> to
+    web install, with TINCAN_CONFIG set to the same file used at join. The
+    service keeps that name and config; --name also exists on web serve.
+    Install the services (each prints how to start and keep it running):
 
         TINCAN_CONFIG=~/.config/tincan/history.json     tincan history install --extension-dir <extension folder>
         TINCAN_CONFIG=~/.config/tincan/chatgpt-web.json tincan web install --site chatgpt

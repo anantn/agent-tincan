@@ -390,9 +390,11 @@ type nudge struct {
 // Waker implements relay.Events, relay.Requeuer, relay.Replier,
 // relay.WakeNamer and relay.WakeReporter.
 type Waker struct {
-	cfg   Config
-	opts  Options
-	audit *store.Store
+	cfgMu      sync.RWMutex
+	configPath string
+	cfg        Config
+	opts       Options
+	audit      *store.Store
 
 	mu      sync.Mutex
 	pending map[string]*nudge      // agents with a nudge scheduled
@@ -570,7 +572,7 @@ func (w *Waker) Joined(agent string) {
 
 // WakeMethod implements relay.WakeNamer: agents see only the method name.
 func (w *Waker) WakeMethod(agent string) string {
-	if t, ok := w.cfg[agent]; ok && t.Method != "" {
+	if t := w.target(agent); t.Method != "" {
 		return t.Method
 	}
 	return None
@@ -589,7 +591,7 @@ func (t Target) Interval() time.Duration {
 // CheckEvery implements relay.Scheduler: a schedule agent's check interval,
 // 0 for an agent on any other method.
 func (w *Waker) CheckEvery(agent string) time.Duration {
-	if t, ok := w.cfg[agent]; ok && t.Method == Schedule {
+	if t := w.target(agent); t.Method == Schedule {
 		return max(t.Interval(), 0)
 	}
 	return 0
@@ -704,8 +706,8 @@ func (w *Waker) schedule(agent string, checkOnline, urgent, ask bool) {
 
 // relaySide reports whether the relay itself wakes agent.
 func (w *Waker) relaySide(agent string) bool {
-	t, ok := w.cfg[agent]
-	return ok && (t.Method == Webhook || t.Method == Email)
+	t := w.target(agent)
+	return (t.Method == Webhook || t.Method == Email)
 }
 
 // nudgeFor returns agent's pending nudge, creating it. Caller holds w.mu.
@@ -838,7 +840,7 @@ func (w *Waker) deliver(agent string, p *nudge, gen uint64) {
 	}
 	msg := UrgentWaitingMessage(p.requests, urgent, replies)
 	key := nudgeKey() // the retry reuses it, so a lost response never runs two turns
-	cfg := w.cfg[agent]
+	cfg := w.target(agent)
 	step := w.pathStep(agent, p.followUp && p.requests > 0)
 	t := cfg.path(step)
 	marker := "" // names a fallback in the stored result, never its URL
@@ -952,7 +954,7 @@ func (w *Waker) endWake(ctx context.Context, agent string, at time.Time) {
 // path, wrapping to the primary after the last; any other nudge reuses the
 // path the episode last sent on. Caller must not hold w.mu.
 func (w *Waker) pathStep(agent string, followUp bool) int {
-	n := len(w.cfg[agent].Fallback) + 1
+	n := len(w.target(agent).Fallback) + 1
 	silent := w.silent(agent)
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -964,7 +966,7 @@ func (w *Waker) pathStep(agent string, followUp bool) int {
 // peekStep is the path pathStep would pick, without moving the episode
 // there. Caller must not hold w.mu.
 func (w *Waker) peekStep(agent string, followUp bool) int {
-	n := len(w.cfg[agent].Fallback) + 1
+	n := len(w.target(agent).Fallback) + 1
 	silent := w.silent(agent)
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -1118,7 +1120,7 @@ func (w *Waker) retryLater(agent string, step int, gen uint64) {
 
 // allow applies the hourly budget. Caller holds w.mu.
 func (w *Waker) allow(agent string) bool {
-	max := w.cfg[agent].MaxPerHour
+	max := w.target(agent).MaxPerHour
 	if max == 0 {
 		max = 12
 	}

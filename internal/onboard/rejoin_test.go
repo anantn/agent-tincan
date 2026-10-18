@@ -41,9 +41,13 @@ func TestEveryAgentGetsTheSelfHealLine(t *testing.T) {
 			continue
 		}
 		if kind == KindNotes || kind == KindCouncil || kind == KindPass || kind == KindChatGPTWeb || kind == KindClaudeWeb || kind == KindGrokWeb || kind == KindGeminiWeb || kind == KindPerplexityWeb || kind == KindCopilotWeb || kind == KindDotWeb {
-			// Services too, with the fixed config path their service sets.
+			// Web services keep the invited name in their own config; other services use the kind default.
+			configName := kind
+			if isWebKind(kind) {
+				configName = "a-" + kind
+			}
 			setup := strings.Join(block(t, k, "a-"+kind).Setup, "\n")
-			if want := "TINCAN_CONFIG=~/.config/tincan/" + kind + ".json tincan rejoin --relay " + relayURL + " --name a-" + kind; !strings.Contains(setup, "not joined") || !strings.Contains(setup, want) {
+			if want := "TINCAN_CONFIG=~/.config/tincan/" + configName + ".json tincan rejoin --relay " + relayURL + " --name a-" + kind; !strings.Contains(setup, "not joined") || !strings.Contains(setup, want) {
 				t.Errorf("%s setup lacks its rejoin line %q:\n%s", kind, want, setup)
 			}
 			continue

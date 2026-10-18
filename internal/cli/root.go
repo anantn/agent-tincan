@@ -28,7 +28,7 @@ func Root() *cobra.Command {
 	// `$(tincan version)` work. Cobra's Print* default to stderr; errors
 	// stay there (main prints them to stderr).
 	root.SetOut(os.Stdout)
-	root.AddCommand(relayCmd(), versionCmd())
+	root.AddCommand(relayCmd(), versionCmd(), wakeCmd())
 	root.AddCommand(agentCmds()...)
 	root.AddCommand(topCmd(), pingCmd(), mcpCmd(), doctorCmd(), traceCmd(), searchCmd(), auditCmd(), listenCmd(), connectCmd(), roomCmd(), onboardCmd(), rejoinCmd(), upgradeCmd(), relayUpgradeCmd(), historyCmd(), notesCmd(), wakesCmd(), councilCmd(), passCmd(), webCmd(), attachmentCmd(), releaseToolsCmd(), relayWatchCmd(), servicesCmd())
 	withRejoinHints(root)

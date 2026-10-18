@@ -103,7 +103,7 @@ func (p *perplexityBrowser) Exchange(_ context.Context, req NativeRequest, recv 
 		}
 		n := len(p.threads[slug])
 		now := time.Now()
-		said := req.Args.Message
+		said := unmarkedTestMessage(req.Args.Message)
 		if p.repeat > 0 {
 			said = strings.Repeat(said, p.repeat)
 		}
@@ -353,6 +353,7 @@ func TestPerplexityWebThreading(t *testing.T) {
 		t.Fatalf("sends %+v", got)
 	}
 	for i := range want {
+		got[i].Message = unmarkedTestMessage(got[i].Message)
 		if got[i] != want[i] {
 			t.Errorf("send %d = %+v, want %+v", i, got[i], want[i])
 		}

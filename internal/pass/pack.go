@@ -33,7 +33,8 @@ func Budget(dst history.Source) int {
 	if n, ok := siteBudgets[dst]; ok {
 		return n
 	}
-	return history.MaxSendMessage
+	// Leave room for the relay identity marker added by the destination.
+	return history.MaxSendMessage - 128
 }
 
 // newNonce returns a per-pass delimiter nonce.

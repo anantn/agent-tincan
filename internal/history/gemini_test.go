@@ -327,6 +327,7 @@ func newGemRig(t *testing.T, detail func(n int, sentAt time.Time) (json.RawMessa
 	g.agent.Name = "gemini-web"
 	g.agent.ClaudeStableFor = time.Nanosecond
 	var sentAt time.Time
+	var sentMessage string
 	polls := 0
 	g.agent.Native = &Client{Cooldown: &SiteCooldown{}, Channel: channelFunc(func(_ context.Context, req NativeRequest, recv func(NativeResponse) (bool, error)) error {
 		g.mu.Lock()
@@ -346,6 +347,7 @@ func newGemRig(t *testing.T, detail func(n int, sentAt time.Time) (json.RawMessa
 			g.sends = append(g.sends, req.Args)
 			serr := g.sendErr
 			sentAt = now()
+			sentMessage = req.Args.Message
 			id := g.sendID
 			g.mu.Unlock()
 			if serr != nil {
@@ -371,7 +373,7 @@ func newGemRig(t *testing.T, detail func(n int, sentAt time.Time) (json.RawMessa
 				_, err := recv(NativeResponse{ID: req.ID, Error: nerr})
 				return err
 			}
-			_, err := recv(NativeResponse{ID: req.ID, OK: true, Result: raw})
+			_, err := recv(NativeResponse{ID: req.ID, OK: true, Result: markedTestDetail(raw, sentMessage)})
 			return err
 		case OpGeminiFile:
 			g.mu.Lock()
@@ -544,7 +546,7 @@ func TestWebGeminiConversationForms(t *testing.T) {
 		if res.Status != envelope.StatusAnswered || !strings.HasSuffix(res.Reply.Body, "Gemini conversation: "+conv) {
 			t.Fatalf("%s: %s %q", ref, res.Status, res.Reply.Body)
 		}
-		if len(rig.sends) != 1 || rig.sends[0].ConversationID != conv || rig.sends[0].Message != "and now in French" {
+		if len(rig.sends) != 1 || rig.sends[0].ConversationID != conv || unmarkedTestMessage(rig.sends[0].Message) != "and now in French" {
 			t.Fatalf("%s: sends %+v", ref, rig.sends)
 		}
 		if st := rig.agent.loadState(); st.Conversations["grokbot"].ID != conv {

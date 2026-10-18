@@ -187,3 +187,9 @@ Replies and what to do:
 - "The history agent could not use its window file": `~/.config/tincan/history-window.json` is unreadable, not `{"days": N, "max": N}`, or out of bounds. Fix or delete it. The log says which.
 - "... were searched, so older ones may be missing": the window stopped the lookup before it was complete. Widen the window if the conversation is older.
 - No reply at all: check the service is loaded (`launchctl print gui/$(id -u)/com.agenttincan.history`) and read `~/Library/Logs/tincan-history.log`. A "403" there means the config is not joined as an agent.
+
+## Release zip installation fallback
+
+If the Chrome Web Store listing is unavailable, download `tincan-history-extension.zip` from the same GitHub release as your binary, unzip to a permanent folder, and use Chrome's `chrome://extensions` → Developer mode → Load unpacked. Select the folder containing `manifest.json`, then run `tincan history install --extension-dir /absolute/path/to/folder`.
+
+The expected unpacked ID is `ciejooalclcpgpapboofdbbddphldhnh`; the store build uses `goldflchpojcjmifnljlfkgoahjgeajn`. Both are accepted by the native host. Releases after v0.18.1 include the extension zip in `checksums.txt`; v0.18.1 and earlier do not. Verify the entry from the same release when present, and click Reload in Chrome after replacing an unpacked installation's files.

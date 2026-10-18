@@ -174,7 +174,7 @@ func TestInstallWebServiceLinuxAndBadInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(res.Path)
-	for _, want := range []string{`ExecStart="/opt/tincan" web serve --site claude-ai`, "TINCAN_CONFIG=%h/.config/tincan/claude-web.json"} {
+	for _, want := range []string{`ExecStart="/opt/tincan" web serve --site claude-ai`, "TINCAN_CONFIG=" + filepath.Join(home, ".config", "tincan", "claude-web.json")} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("unit missing %q:\n%s", want, b)
 		}

@@ -28,7 +28,7 @@ TINCAN_CONFIG=~/.hermes/tincan-hermes.json tincan join <code> --relay http://tin
 
 ## Send
 
-Add `tincan mcp` as a stdio MCP server. See `examples/hermes/config-snippet.yaml` for the `mcp_servers.agent-tincan` entry to add to `~/.hermes/config.yaml`. `hermes mcp add agent-tincan --command tincan --args mcp` also works (answer Y to enable the tools). Restart the gateway (`hermes gateway restart`) so webhook-started sessions load the new server; `/reload-mcp` covers only a running chat. After that Hermes has `ask`, `check_inbox`, `reply`, `get_reply`, `list_agents`, `cancel`, `claim`, `trace`, `onboard`, and `get_attachment`.
+Add `tincan mcp` as a stdio MCP server. See `examples/hermes/config-snippet.yaml` for the `mcp_servers.agent-tincan` entry to add to `~/.hermes/config.yaml`. `hermes mcp add agent-tincan --command tincan --args mcp` also works (answer Y to enable the tools; without a TTY, use `printf 'y\n' | hermes mcp add agent-tincan --command tincan --args mcp`). Restart the gateway (`hermes gateway restart`) so webhook-started sessions load the new server; `/reload-mcp` covers only a running chat. After that Hermes has `ask`, `check_inbox`, `reply`, `get_reply`, `list_agents`, `cancel`, `claim`, `trace`, `onboard`, and `get_attachment`.
 
 ## Wake
 
@@ -79,3 +79,9 @@ tincan listen --exec 'hermes -z "Call check_inbox, claim and do each waiting Age
 - An `ask` Hermes sends may return before the teammate answers; Hermes does not have to hold the turn open for it. When the reply arrives and is still unread after the relay's reply grace period (`--reply-grace`, default 60s), the relay wakes Hermes with a count-only message ("1 reply to your request is waiting"), and check_inbox shows replies to Hermes's requests (with what it asked) before new requests. The route prompt should tell Hermes to finish the work that was waiting on each reply.
 - A webhook route with no `secret` refuses to start. Do not set `secret` to `INSECURE_NO_AUTH` unless the webhook server is bound to loopback only.
 - The webhook payload's business fields (anything past `source`/`message`/`text`) are not used here, but Hermes treats all webhook payload content as untrusted by default; keep the `tincan` route's prompt narrow rather than dumping the raw payload.
+
+## Starting services from a supervising gateway
+
+A Hermes gateway may refuse `launchctl bootstrap`, `launchctl load` or a service restart because it could restart the gateway indirectly. Write the plist and give the owner the exact command to run in their own terminal, for example `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.agenttincan.relay.plist`. Respect the supervisor's guard; this handoff is the expected final installation step in that environment.
+
+Test the wake with a fresh ask initiated by a different teammate. An ask back into the same active request chain is refused with HTTP 409, even after sending a reply. The reply's status determines success: a `replied` audit event alone does not mean it was answered successfully.

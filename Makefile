@@ -75,7 +75,7 @@ extension-test:
 
 # Release targets: the raw binaries the release page and the relay's --dist
 # directory carry, stripped (-s -w) like the published releases.
-# checksums.txt covers the binaries.
+# checksums.txt covers the binaries and unpacked extension zip.
 RELEASE_TARGETS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64
 
 # MACAPP=1 builds the darwin binaries with the Agent Tincan.app zip that
@@ -94,7 +94,7 @@ macapp-zip-check:
 	@[ -f "$(MACAPP_ZIP)" ] || { echo "make dist: MACAPP=1 needs $(MACAPP_ZIP); run make mac-app first" >&2; exit 1; }
 
 checksums:
-	cd dist && shasum -a 256 tincan_* > checksums.txt
+	cd dist && shasum -a 256 tincan_* tincan-history-extension.zip > checksums.txt
 
 # macOS signing and notarization (optional; make dist works without a
 # certificate). Signing changes the binaries' bytes, so sign-mac rewrites

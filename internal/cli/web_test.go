@@ -441,3 +441,39 @@ func TestWebServeDotsNeedsDotWebKind(t *testing.T) {
 		srv.Close()
 	}
 }
+
+func TestWebInstallCustomNameAndConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	cfg := filepath.Join(home, "my configs", "dayward.json")
+	if err := os.MkdirAll(filepath.Dir(cfg), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg, []byte(`{"agent":"dayward","relay":"http://relay"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, Root(), "web", "install", "--site", "claude-ai", "--name", "dayward", "--config", cfg, "--binary", "/opt/tincan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := filepath.Join(home, ".config", "systemd", "user", "tincan-dayward.service")
+	if runtime.GOOS == "darwin" {
+		def = filepath.Join(home, "Library", "LaunchAgents", "com.agenttincan.web.claude-ai.dayward.plist")
+	}
+	b, err := os.ReadFile(def)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{cfg, "--name", "dayward"} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("missing %q: %s", want, b)
+		}
+	}
+	if !strings.Contains(out, cfg) {
+		t.Fatal(out)
+	}
+	if _, err := run(t, Root(), "web", "install", "--site", "claude-ai", "--config", cfg, "--binary", "/opt/tincan"); err == nil {
+		t.Fatal("installed as wrong name")
+	}
+}

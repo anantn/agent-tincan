@@ -173,8 +173,9 @@ type Replier interface {
 
 // Server is the relay.
 type Server struct {
-	cfg Config
-	dir *identity.Directory
+	wakeSettings WakeSettings
+	cfg          Config
+	dir          *identity.Directory
 	// lookupAgent is how requestTTL reads the recipient's kind; it is
 	// dir.Agent, replaced in tests to simulate a failed lookup.
 	lookupAgent func(ctx context.Context, name string) (identity.Agent, bool, error)
@@ -416,6 +417,8 @@ func (s *Server) Handler() http.Handler {
 // adminRoutes registers the routes served on both the tailnet API (for admin
 // devices) and the local admin socket. /v1/agents is added by the caller.
 func (s *Server) adminRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/admin/wake-config", s.handleWakeSettings)
+	mux.HandleFunc("PUT /v1/admin/wake-config/{agent}", s.handleWakeSettings)
 	mux.HandleFunc("GET /v1/admin/held", s.handleHeld)
 	mux.HandleFunc("POST /v1/admin/requests/{id}/approve", s.handleApprove)
 	mux.HandleFunc("POST /v1/admin/requests/{id}/deny", s.handleDeny)

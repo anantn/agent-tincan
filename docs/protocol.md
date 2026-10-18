@@ -336,6 +336,15 @@ A poll with no messages holds until its normal deadline, then returns HTTP 200 w
 
 `GET /v1/admin/wakes/{agent}?since=<RFC3339>[&until=<RFC3339>]` lists the agent's relay wakes in the window for admins (403 for anyone else): `{"agent","since","until","wakes":[...]}`, each entry with `at`, `event` (`woke`, `wake_failed` or `wake_skipped`), `path` (`webhook` or `email`), `status` (the HTTP code, or `2xx` for `woke` rows written before the code was recorded), `reply` (the webhook's reply summary, or `not recorded`), `error`, `next_poll`, `next_via` (`poll`, or `delivered` / `claimed` for older rows) and `request_ids` (the requests a `woke` row covered, from its `request_id` or its `ids:` segment; left out for rows without ids). Polls are read from a `polled` audit row the relay writes on the first poll after each wake; a poll made while the wake call is still answering gets its row when the call ends, after the wake's own. A poll's time is when it happened, also for one written after its wake call ended. One export lists at most 1000 wakes; when it hits that bound the response has `"truncated": true` and lists the oldest, and a later `since` shows the rest. Polls and deliveries do not count toward the bound, and a wake's next poll is found even after `until`. No URL, token or key appears. `tincan wakes <agent> --since <time>` prints it as a table or, with `--json`, as JSON.
 
+### Webhook wake configuration
+
+Admin devices and the local admin socket can manage webhook wakes without restarting the relay:
+
+- `GET /v1/admin/wake-config` returns a map of configured agent names to method names. URLs, addresses and authentication fields are never returned.
+- `PUT /v1/admin/wake-config/{agent}` takes `{"webhook":"https://host/hook","bearer_token":"optional secret"}` and returns `{"agent":"name","method":"webhook"}`. Omit `bearer_token` to preserve it; an empty string clears it. The agent must be joined (404 otherwise). Invalid input returns 400, non-admin callers get 403, and a relay without configuration support returns 501.
+
+The relay validates an absolute HTTP(S) URL without user info or a fragment, serializes updates, and atomically replaces its private `wake.json` with mode 0600 before changing the live settings. Unrelated agents and existing HMAC, fallback and rate settings are retained. Failed writes leave the live configuration unchanged. Converting an email wake still requires editing the file and restarting, because its reply inboxes are registered at startup. The CLI surfaces are `tincan wake set <agent> --webhook <url> [--bearer-token-stdin]` and `tincan wake list`.
+
 ### Relay self-upgrade
 
 `POST /v1/admin/relay/upgrade` installs a release over the relay's own binary. Only admin devices and the local admin socket may call it; agents and other callers get 403. The optional body is `{"force": false, "from_github": "v0.8.0"}`.

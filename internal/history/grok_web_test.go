@@ -113,7 +113,7 @@ func (g *grokBrowser) Exchange(ctx context.Context, req NativeRequest, recv func
 		n := len(g.convs[id])
 		now := time.Now()
 		g.convs[id] = append(g.convs[id], &grokTurn{
-			human: req.Args.Message, answer: "Grok says: " + req.Args.Message,
+			human: req.Args.Message, answer: "Grok says: " + unmarkedTestMessage(req.Args.Message),
 			humanID: fmt.Sprintf("h-%s-%d", id[len(id)-3:], n), answerID: fmt.Sprintf("a-%s-%d", id[len(id)-3:], n),
 			at: now, lag: g.lag, partial: g.partial, inflight: g.inflight, image: g.image != nil,
 		})
@@ -313,6 +313,7 @@ func TestGrokWebThreading(t *testing.T) {
 		t.Fatalf("sends %+v", got)
 	}
 	for i := range want {
+		got[i].Message = unmarkedTestMessage(got[i].Message)
 		if got[i] != want[i] {
 			t.Errorf("send %d = %+v, want %+v", i, got[i], want[i])
 		}

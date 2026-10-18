@@ -19,7 +19,8 @@ import (
 var templateFS embed.FS
 
 var tmpl = template.Must(template.New("onboard").Funcs(template.FuncMap{
-	"join": strings.Join,
+	"join":      strings.Join,
+	"isWebKind": isWebKind,
 }).ParseFS(templateFS, "templates/*.tmpl"))
 
 // Kinds an agent block or recipe can be tailored to.

@@ -497,6 +497,8 @@ func runRelay(ctx context.Context, f relayFlags) error {
 		wopts.HTTP = wakeHTTPClient(d.DialTailnet)
 	}
 	waker := wake.New(wakeCfg, st, wopts)
+	waker.SetConfigPath(filepath.Join(f.stateDir, "wake.json"))
+	srv.SetWakeSettings(waker)
 	if inboxes := emailReplyInboxes(wakeCfg); len(inboxes) > 0 {
 		srv.SetEmailInboxes(inboxes)
 		log.Printf("polling AgentMail for email replies from %d agents with include_requests on", len(inboxes))
