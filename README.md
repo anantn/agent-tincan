@@ -115,6 +115,8 @@ Want to manage the team from your laptop too? Start the relay with `--admin <lap
 
 ## New in v0.18.1 and v0.18.0
 
+**Latest: [v0.18.2](https://github.com/mvanhorn/agent-tincan/releases/tag/v0.18.2)** fixes setup names/config paths, adds live admin webhook management, improves tool guidance and reply diagnostics, and publishes extension checksums.
+
 See who's working, keep going when a subscription runs out, pass a conversation between AI sites, and manage your team from your phone. [v0.18.0 release notes](https://github.com/mvanhorn/agent-tincan/releases/tag/v0.18.0) describe the full release; [v0.18.1](https://github.com/mvanhorn/agent-tincan/releases/tag/v0.18.1) includes the live-testing fixes.
 
 - **Team status and watch.** The roster, `list_agents` and `tincan top` show busy, idle, stuck, limited or offline with a reason. `tincan watch <agent>` (or the `watch` tool) tells you once when a teammate becomes free. Claude Code reports its session activity; `tincan mcp --share-title` optionally shares the session title as `working_on`.
@@ -127,7 +129,7 @@ See who's working, keep going when a subscription runs out, pass a conversation 
 Upgrade the relay first, from an admin device:
 
 ```bash
-tincan relay-upgrade --from-github v0.18.1
+tincan relay-upgrade --from-github v0.18.2
 ```
 
 Self-upgrade needs the relay started with `--dist <dir>` and `--release-url https://github.com/mvanhorn/agent-tincan/releases/download`. Then run `tincan upgrade` on each machine and restart its MCP servers, listeners and web services (or reconnect through `/mcp`). Update the Chrome extension to **0.6.5** for usage-limit detection. Pass requires the destination web agent on 0.18.0 or later. Run `tincan onboard --section agents` again for saved standing instructions. Older clients remain compatible; status, failover, phone and rooms need the new relay.
@@ -741,7 +743,7 @@ Search returns matching requests newest first. All search terms must match; punc
 
 ### Configure a webhook wake
 
-With webhook management installed on both relay and admin client (available in the next release after v0.18.1), configure a joined agent from the relay host or an admin device:
+With webhook management installed on both relay and admin client (available in v0.18.2 and later), configure a joined agent from the relay host or an admin device:
 
 ```bash
 tincan wake set grokbot --webhook https://<host>/<hook> --bearer-token-stdin < /path/to/private-token
@@ -1489,7 +1491,7 @@ make release VERSION=x.y.z NOTES=<file>   # the whole release (see below)
 
 `make build` builds one binary, for the machine you run it on. CI runs `go vet` and `go test -race` on Linux and macOS, and checks the static builds for linux/amd64, linux/arm64, darwin/arm64 and darwin/amd64.
 
-Releases are on the GitHub repo's release page. Each carries `tincan_darwin_arm64`, `tincan_darwin_amd64` (Intel Mac), `tincan_linux_amd64`, `tincan_linux_arm64`, `checksums.txt` (sha256 of the four binaries) and `tincan-history-extension.zip`. The binaries and `checksums.txt` are what the relay's `--dist` directory takes (add a `VERSION` file).
+Releases are on the GitHub repo's release page. Each carries `tincan_darwin_arm64`, `tincan_darwin_amd64` (Intel Mac), `tincan_linux_amd64`, `tincan_linux_arm64`, `checksums.txt` (sha256 of the four binaries and extension zip) and `tincan-history-extension.zip`. The binaries and `checksums.txt` are what the relay's `--dist` directory takes (add a `VERSION` file).
 
 Releases are cut on the maintainer's Mac; CI does not publish them. One command does the whole release from a clean checkout of `main`:
 
