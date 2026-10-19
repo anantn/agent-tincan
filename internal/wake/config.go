@@ -3,6 +3,7 @@ package wake
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -58,7 +59,7 @@ func (w *Waker) ConfigureWebhook(agent, endpoint, token string, setToken bool) e
 		cfg = Config{}
 	}
 	t := cfg[agent]
-	if t.Method == Email {
+	if t.Method == Email || w.cfg[agent].Method == Email {
 		return errors.New("changing an email wake needs a relay restart; edit wake.json to change its method")
 	}
 	t.Method, t.URL = Webhook, endpoint
@@ -68,6 +69,19 @@ func (w *Waker) ConfigureWebhook(agent, endpoint, token string, setToken bool) e
 	if err := checkTarget(t); err != nil {
 		return errors.New("invalid webhook settings")
 	}
+	live := maps.Clone(w.cfg)
+	if live == nil {
+		live = Config{}
+	}
+	target := live[agent]
+	target.Method, target.URL = Webhook, endpoint
+	if setToken {
+		target.BearerToken = token
+	}
+	live[agent] = target
+	if err := checkTarget(target); err != nil {
+		return errors.New("invalid live webhook settings")
+	}
 	cfg[agent] = t
 	raw, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -76,7 +90,7 @@ func (w *Waker) ConfigureWebhook(agent, endpoint, token string, setToken bool) e
 	if err := writeWakeConfig(w.configPath, append(raw, '\n')); err != nil {
 		return errors.New("cannot save wake.json on the relay; live settings were not changed")
 	}
-	w.cfg = cfg
+	w.cfg = live
 	return nil
 }
 

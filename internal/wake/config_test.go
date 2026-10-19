@@ -140,3 +140,68 @@ func TestConfigureWebhookChangesActualWakeDestination(t *testing.T) {
 		t.Fatal("new settings not used by webhook")
 	}
 }
+
+func TestConfigureWebhookDoesNotActivateUnrelatedDiskEdits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wake.json")
+	startup := Config{
+		"mail":    {Method: Email, EmailTo: "old@example.com", AgentMailFrom: "old-inbox", AgentMailKey: "key", IncludeRequests: true},
+		"hook":    {Method: Webhook, URL: "https://old.example/hook", BearerToken: "live-token", MaxPerHour: 3},
+		"removed": {Method: Wait},
+	}
+	raw, err := json.Marshal(startup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	w := New(startup, nil, Options{})
+	defer w.Stop()
+	w.SetConfigPath(path)
+	pending, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mail := pending["mail"]
+	mail.EmailTo, mail.AgentMailFrom = "new@example.com", "new-inbox"
+	pending["mail"] = mail
+	hook := pending["hook"]
+	hook.MaxPerHour, hook.BearerToken = 8, "pending-token"
+	pending["hook"] = hook
+	delete(pending, "removed")
+	pending["added"] = Target{Method: Command}
+	raw, err = json.Marshal(pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.ConfigureWebhook("hook", "https://updated.example/hook", "", false); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved["mail"].EmailTo != "new@example.com" || saved["mail"].AgentMailFrom != "new-inbox" || saved["added"].Method != Command || saved["removed"].Method != "" || saved["hook"].BearerToken != "pending-token" {
+		t.Fatalf("pending disk edits lost: %#v", saved)
+	}
+	if w.target("mail").EmailTo != "old@example.com" || w.target("mail").AgentMailFrom != "old-inbox" || w.WakeMethod("removed") != Wait || w.WakeMethod("added") != None {
+		t.Fatal("unrelated disk edits activated before restart")
+	}
+	live := w.target("hook")
+	if live.URL != "https://updated.example/hook" || live.BearerToken != "live-token" || live.MaxPerHour != 3 {
+		t.Fatalf("unexpected live webhook: %#v", live)
+	}
+	if err := w.ConfigureWebhook("hook", "https://updated.example/hook", "explicit-token", true); err != nil {
+		t.Fatal(err)
+	}
+	saved, err = LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved["hook"].BearerToken != "explicit-token" || w.target("hook").BearerToken != "explicit-token" {
+		t.Fatal("explicit token did not update both settings")
+	}
+}
