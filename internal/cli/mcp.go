@@ -393,7 +393,7 @@ func channelNotice(count int, from []string) string {
 	if len(from) > 0 {
 		who = " from " + strings.Join(from, ", ")
 	}
-	return fmt.Sprintf("%d Agent Tincan %s waiting%s. Call check_inbox to take %s, then reply to each request.", count, items, who, them)
+	return fmt.Sprintf("%d Agent Tincan %s waiting%s. If tools are deferred, use ToolSearch with select:mcp__agent-tincan__check_inbox,mcp__agent-tincan__reply. Call check_inbox to take %s, then use the reply tool for each request.", count, items, who, them)
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) {

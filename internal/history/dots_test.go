@@ -354,7 +354,7 @@ func TestDotWebSendsIntoTheThreadAndRepliesWithTheDotsAnswer(t *testing.T) {
 	if res.Reply.Body != want {
 		t.Fatalf("reply\n%s\nwant\n%s", res.Reply.Body, want)
 	}
-	if got := b.sent(); len(got) != 1 || got[0] != (OpArgs{Message: "hello dot", ConversationID: dotThread}) {
+	if got := b.sent(); len(got) != 1 || got[0] != (OpArgs{Message: "[tincan request " + res.Request.ID + " from codex]\nhello dot", ConversationID: dotThread}) {
 		t.Fatalf("sends %+v", got)
 	}
 	if len(b.closes) != 1 || b.closes[0] != dotThread {
@@ -366,7 +366,7 @@ func TestDotWebSendsIntoTheThreadAndRepliesWithTheDotsAnswer(t *testing.T) {
 	if res.Status != envelope.StatusAnswered || !strings.HasPrefix(res.Reply.Body, "ok\n\n") {
 		t.Fatalf("%s %q", res.Status, res.Reply.Body)
 	}
-	if got := b.sent(); len(got) != 2 || got[1] != (OpArgs{Message: "conversation: abc\nsecond", ConversationID: dotThread}) {
+	if got := b.sent(); len(got) != 2 || got[1] != (OpArgs{Message: "[tincan request " + res.Request.ID + " from codex]\nconversation: abc\nsecond", ConversationID: dotThread}) {
 		t.Fatalf("sends %+v", got)
 	}
 }
@@ -390,7 +390,7 @@ func TestDotWebDropsALeadingNewChatLine(t *testing.T) {
 		if res.Status != envelope.StatusAnswered {
 			t.Fatalf("%q: %s %q", tc.body, res.Status, res.Reply.Body)
 		}
-		if got := b.sent(); len(got) != 1 || got[0] != (OpArgs{Message: tc.want, ConversationID: dotThread}) {
+		if got := b.sent(); len(got) != 1 || got[0] != (OpArgs{Message: "[tincan request " + res.Request.ID + " from codex]\n" + tc.want, ConversationID: dotThread}) {
 			t.Fatalf("%q: sends %+v, want %q", tc.body, got, tc.want)
 		}
 	}

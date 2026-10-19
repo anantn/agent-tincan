@@ -189,7 +189,7 @@ func TestEmptyChatIsRefused(t *testing.T) {
 }
 
 func TestBudgetPerSite(t *testing.T) {
-	if Budget(history.SourceChatGPT) != history.MaxSendMessage || Budget(history.SourceGemini) != history.MaxSendMessage {
+	if Budget(history.SourceChatGPT) != history.MaxSendMessage-128 || Budget(history.SourceGemini) != history.MaxSendMessage-128 {
 		t.Fatal("default budget is not the send cap")
 	}
 	if Budget(history.SourceClaudeAI) >= history.MaxSendMessage {

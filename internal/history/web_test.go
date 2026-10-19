@@ -130,7 +130,7 @@ func (f *fakeBrowser) Exchange(ctx context.Context, req NativeRequest, recv func
 			return err
 		}
 		now := time.Now()
-		t := &fakeTurn{prompt: req.Args.Message, reply: f.reply(req.Args.Message), sentAt: now, lag: f.lag, pending: f.inProgress}
+		t := &fakeTurn{prompt: req.Args.Message, reply: f.reply(unmarkedTestMessage(req.Args.Message)), sentAt: now, lag: f.lag, pending: f.inProgress}
 		if f.image != nil {
 			t.imageID = fmt.Sprintf("file-Gen%d", len(f.convs[id])+f.seq)
 		}
@@ -305,7 +305,7 @@ func TestWebAllowedAskerGetsReplyWithImage(t *testing.T) {
 		t.Errorf("closes = %v, want the tab of conv-1 closed once", got)
 	}
 	sends := rig.browser.sent()
-	if len(sends) != 1 || sends[0].Message != "Draw a fox logo" || sends[0].NewChat || sends[0].ConversationID != "" {
+	if len(sends) != 1 || sends[0].Message != "[tincan request "+res.Request.ID+" from grokbot]\nDraw a fox logo" || sends[0].NewChat || sends[0].ConversationID != "" {
 		t.Fatalf("sends = %+v", sends)
 	}
 	if len(res.Reply.Attachments) != 1 {
@@ -449,6 +449,7 @@ func TestWebRemembersConversationPerAsker(t *testing.T) {
 		t.Fatalf("sends = %+v", got)
 	}
 	for i := range want {
+		got[i].Message = unmarkedTestMessage(got[i].Message)
 		if got[i] != want[i] {
 			t.Errorf("send %d = %+v, want %+v", i, got[i], want[i])
 		}
@@ -706,6 +707,7 @@ func claudeRig(t *testing.T, frames []*string, stopReason string) (*webRig, func
 	var ops []Op
 	var closes []string
 	var sentAt time.Time
+	var sentMessage string
 	polls := 0
 	rig := newWebRig(t)
 	rig.agent.Site = SourceClaudeAI
@@ -718,6 +720,7 @@ func claudeRig(t *testing.T, frames []*string, stopReason string) (*webRig, func
 		case OpClaudeAISend:
 			mu.Lock()
 			sentAt = time.Now()
+			sentMessage = req.Args.Message
 			mu.Unlock()
 			res, _ := json.Marshal(SendResult{ConversationID: id, URL: "https://claude.ai/chat/" + id, SubmittedAt: sentAt.UnixMilli()})
 			_, err := recv(NativeResponse{ID: req.ID, OK: true, Result: res})
@@ -728,7 +731,7 @@ func claudeRig(t *testing.T, frames []*string, stopReason string) (*webRig, func
 			polls++
 			at := sentAt
 			mu.Unlock()
-			_, err := recv(NativeResponse{ID: req.ID, OK: true, Result: claudeDetail(id, at, "hello claude", f, stopReason)})
+			_, err := recv(NativeResponse{ID: req.ID, OK: true, Result: claudeDetail(id, at, sentMessage, f, stopReason)})
 			return err
 		case OpClaudeAIClose:
 			mu.Lock()
@@ -853,6 +856,7 @@ func newScriptRig(t *testing.T, site Source, detail func(n int, sentAt time.Time
 	s.agent.Site = site
 	s.agent.ClaudeStableFor = time.Nanosecond
 	var sentAt time.Time
+	var sentMessage string
 	polls := 0
 	s.agent.Native = &Client{Channel: channelFunc(func(_ context.Context, req NativeRequest, recv func(NativeResponse) (bool, error)) error {
 		s.mu.Lock()
@@ -862,6 +866,7 @@ func newScriptRig(t *testing.T, site Source, detail func(n int, sentAt time.Time
 		case OpChatGPTSend, OpClaudeAISend:
 			s.mu.Lock()
 			sentAt = time.Now()
+			sentMessage = req.Args.Message
 			s.mu.Unlock()
 			res, _ := json.Marshal(SendResult{ConversationID: scriptConv, SubmittedAt: sentAt.UnixMilli()})
 			_, err := recv(NativeResponse{ID: req.ID, OK: true, Result: res})
@@ -876,7 +881,7 @@ func newScriptRig(t *testing.T, site Source, detail func(n int, sentAt time.Time
 				_, err := recv(NativeResponse{ID: req.ID, Error: nerr})
 				return err
 			}
-			_, err := recv(NativeResponse{ID: req.ID, OK: true, Result: raw})
+			_, err := recv(NativeResponse{ID: req.ID, OK: true, Result: markedTestDetail(raw, sentMessage)})
 			return err
 		case OpChatGPTClose, OpClaudeAIClose:
 			s.mu.Lock()
@@ -1426,4 +1431,26 @@ func TestWebPassedListSharedBySite(t *testing.T) {
 	if got := rig.browser.sent(); len(got) != 1 {
 		t.Fatalf("a continuation was sent: %+v", got)
 	}
+}
+
+// Scripted vendor fixtures echo the exact submitted user message, including
+// the provenance line, while retaining their later-turn and clock-skew cases.
+func markedTestDetail(raw json.RawMessage, sent string) json.RawMessage {
+	parts := strings.SplitN(sent, "\n", 2)
+	if len(parts) != 2 {
+		return raw
+	}
+	oldJSON, _ := json.Marshal(parts[1])
+	newJSON, _ := json.Marshal(sent)
+	return json.RawMessage(strings.ReplaceAll(string(raw), string(oldJSON), string(newJSON)))
+}
+
+func unmarkedTestMessage(message string) string {
+	if strings.HasPrefix(message, "[tincan request ") {
+		_, body, ok := strings.Cut(message, "\n")
+		if ok {
+			return body
+		}
+	}
+	return message
 }

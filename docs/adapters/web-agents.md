@@ -544,3 +544,19 @@ and keeps serving. An old extension disables session probes with one upgrade
 notice; traffic still detects sign-out, and confirmed sends or fresh ChatGPT/dot
 reads can clear it. Older clients ignore the optional fields. Missing reports mean
 unknown authentication, not a healthy session.
+
+## Custom agent names and config paths
+
+Use the same name and config at join and install (available in the next release after v0.18.1):
+
+```bash
+tincan invite dayward --kind claude-web
+TINCAN_CONFIG=~/.config/tincan/dayward.json tincan join <code> --relay <relay-url>
+TINCAN_CONFIG=~/.config/tincan/dayward.json tincan web install --site claude-ai --name dayward
+```
+
+`web install --config /absolute/path/to/client.json` explicitly selects a config too. The service stores that path and passes `--name dayward` to `web serve`. Start it with the exact command printed by install: custom names have distinct service definitions. Without `--name`, invite under the site's default name (`claude-web` for `claude-ai`).
+
+Every submitted message starts with `[tincan request <id> from <sender>]`, using the relay's request identity. Threading directives are parsed before this line is added. The line counts toward the 32 KB message limit. It identifies relay delivery; the model should still assess the request itself.
+
+For extension installation when the store is unavailable, see [the release-zip instructions](../../README.md#install-from-a-release-if-the-store-is-unavailable).

@@ -14,6 +14,10 @@ Contents:
 
 - [Why it matters](#why-it-matters)
 - [Getting started](#getting-started)
+- [New in v0.18.1 and v0.18.0](#new-in-v0181-and-v0180)
+- [New in v0.17.0 and v0.16.0](#new-in-v0170-and-v0160)
+- [New in v0.15.0](#new-in-v0150)
+- [New in v0.14 and v0.12](#new-in-v014-and-v012)
 - [New in v0.11.2](#new-in-v0112)
 - [New in v0.11.1](#new-in-v0111)
 - [New in v0.11.0](#new-in-v0110)
@@ -45,6 +49,7 @@ Each of your agents has a different power. For example, Grok Bot is always on an
 - Handoff with context. Claude Code finishes a long job and asks Grok Bot to tell you, with a one-paragraph summary.
 - Screenshot to fix. "Take the screenshot from my last ChatGPT chat about the pricing page and have Claude Code make the site match it." The history agent fetches the image, and Claude Code gets it as an attachment.
 - Borrowing the internet. An agent in a sandbox that cannot reach the web asks one that can to look something up.
+- Shared notes. Ask the [Agent Notes teammate](docs/adapters/notes.md) to save a note, find a note or read it back. Adds are spooled on the notes Mac and retried if the app or library is temporarily unavailable.
 
 ## Getting started
 
@@ -108,6 +113,30 @@ tincan doctor
 
 Want to manage the team from your laptop too? Start the relay with `--admin <laptop-name>` (the name `tailscale status` shows). The laptop must be signed in to Tailscale as you and must not carry an agent tag. Each platform's details are in its [adapter doc](docs/adapters/), and the full walkthrough is the [quick start](docs/quickstart.md).
 
+## New in v0.18.1 and v0.18.0
+
+See who's working, keep going when a subscription runs out, pass a conversation between AI sites, and manage your team from your phone. [v0.18.0 release notes](https://github.com/mvanhorn/agent-tincan/releases/tag/v0.18.0) describe the full release; [v0.18.1](https://github.com/mvanhorn/agent-tincan/releases/tag/v0.18.1) includes the live-testing fixes.
+
+- **Team status and watch.** The roster, `list_agents` and `tincan top` show busy, idle, stuck, limited or offline with a reason. `tincan watch <agent>` (or the `watch` tool) tells you once when a teammate becomes free. Claude Code reports its session activity; `tincan mcp --share-title` optionally shares the session title as `working_on`.
+- **Subscription failover.** When a web teammate hits its usage limit before typing, eligible asks move to another free web teammate with the same request id and chain. If nobody is free, they wait for the reset; v0.18.1 fails an ask immediately if that wait would outlive it. Held asks, councils, rooms, groups, attachments, notifies, explicit conversation threads, clarification exchanges and dot-web asks never move. Nothing that may already have been sent moves. See [failover](#when-a-subscription-runs-out-failover).
+- **Pass the conversation.** `tincan pass <chat-url | source> --to <web-teammate>` seeds a fresh chat on another site with the title, earlier-turn summary and newest turns. The optional `pass` teammate lets agents request it, held for your approval by default. v0.18.1 preserves the title and checks the destination's version up front. See [Pass the conversation](#pass-the-conversation).
+- **Your team on your phone.** Open `https://<relay>/phone/` on an admin device on your tailnet and add it to the home screen. See the team, ask a teammate, and approve or deny held requests with single-use codes. Tailnet HTTPS enables content-free push alerts. Phone agents send asks; they do not receive them. See [phone setup](docs/phone.md).
+- **Rooms.** `tincan room create|add|remove` or the phone's Rooms tab manages membership. `tincan room post|read`, `room_post`/`room_read`/`list_rooms`, and the phone share a thread among current members. An @mention asks and wakes that member, and its reply appears in the room. Room content stays out of wake notices, request emails, audit rows and search. See [rooms](#rooms).
+- **More coding teammates and history.** GitHub Copilot CLI and Cursor CLI join with their own wake scripts. History also reads Cursor, Copilot CLI, Gemini CLI and OpenCode chats. `tincan connect` requires `--replace` before taking over an existing agent's name.
+
+Upgrade the relay first, from an admin device:
+
+```bash
+tincan relay-upgrade --from-github v0.18.1
+```
+
+Self-upgrade needs the relay started with `--dist <dir>` and `--release-url https://github.com/mvanhorn/agent-tincan/releases/download`. Then run `tincan upgrade` on each machine and restart its MCP servers, listeners and web services (or reconnect through `/mcp`). Update the Chrome extension to **0.6.5** for usage-limit detection. Pass requires the destination web agent on 0.18.0 or later. Run `tincan onboard --section agents` again for saved standing instructions. Older clients remain compatible; status, failover, phone and rooms need the new relay.
+
+## New in v0.17.0 and v0.16.0
+
+- **Replies reach the right Claude Code window.** Each MCP server has a session id, so one window cannot take another's replies. A window gone for ten minutes releases its unread replies to another session. CLI `tincan inbox` without `TINCAN_SESSION` still sees every reply. Upgrade the relay and restart MCP servers to enable this.
+- **Admin machine identity.** `tincan agents --json` includes each agent's Tailscale node id, machine name and owning login for admins. Agent callers cannot see these fields; virtual agents have none.
+
 ## New in v0.15.0
 
 - [macOS Login Items show "Agent Tincan"](#macos-login-items). tincan's background services used to appear in System Settings > Login Items, and in the "App Background Activity" popup, under the signer's personal name with a blank icon. Release builds now carry a small signed Agent Tincan.app, install it into `~/Applications` (no admin password) and start services through it. New services get this automatically; existing Macs run `tincan services refresh` once, and later upgrades keep it current. `--revert` undoes it. The notes service stays as it was, so its Files and Folders access is not shared.
@@ -121,6 +150,13 @@ Before you upgrade:
 - Upgrade the relay first, from an admin device or the relay host: `tincan relay-upgrade --from-github v0.15.0` (self-upgrade needs the relay started with `--dist <dir>`, and `--from-github` also needs `--release-url https://github.com/mvanhorn/agent-tincan/releases/download`). It is network-facing, so it should get the Go security fixes.
 - Then `tincan upgrade` on each agent, and on each Mac run `tincan services refresh` once.
 - Proxy-only sandboxes with rotating passwords: run `tincan rejoin --proxy-credentials-from-env` once.
+
+## New in v0.14 and v0.12
+
+- **Answer from email.** Email agents can opt into `include_requests` in `wake.json`: each ask arrives with its text and a signed reply tag. Reply in the same thread and wait for the relay's “recorded” acknowledgement. Ordinary wake emails remain count-only; held asks never go out as request emails.
+- **Wakes keep trying.** Queued work triggers follow-up wakes, urgent requests get shorter follow-up and claim intervals, and askers hear when work stalls. Signed-out web accounts are visible in the roster and doctor.
+- **Scheduled teammates.** Hark can run as a scheduled teammate; see [its setup](docs/adapters/hark.md). Sesame has an OAuth connector and scheduled tool checks; see [Sesame](docs/adapters/sesame.md).
+- **Gemini images.** Generated images can be attached to replies after the owner grants the extra Google image-host permissions. Image input to web teammates remains disabled pending live acceptance: asks with attachments fail explicitly.
 
 ## New in v0.11.2
 
@@ -482,6 +518,8 @@ Chains are tracked by the relay, not the model. When an agent asks a teammate wh
 
 - A request that would loop back to an agent already in its chain is rejected ("request would loop back").
 - Chains longer than 4 hops are rejected.
+
+For a wake test, have a different teammate start an independent ask. Asking back into the active chain is rejected with HTTP 409, even just after you reply. A rejected child ask does not change the parent reply. In `tincan trace`, `replied` means a reply was recorded; its status may be `answered`, `failed` or `declined`. The trace prints that status and the reason for rejected attempts.
 - Each sender is limited to 30 new requests per minute by default.
 
 ### Owner approval
@@ -700,6 +738,17 @@ tincan audit-verify       # check the log has not been altered
 ```
 
 Search returns matching requests newest first. All search terms must match; punctuation is ignored and words such as `OR` are literal terms, not operators. Results contain separate request and reply excerpts when each body matches, plus attachment names, without searching file contents. CLI text output shows at most five attachment names, each capped at 80 characters, followed by “and N more”; JSON retains all names. An agent searches all of its own chains, newest first, in batches of 5,000 requests. Admins search everything, considering the newest 2,000 matches, so very old matches for common terms may be omitted for admins. Follow a result with `tincan trace <trace-id>` to read the chain. Search has the same visibility as trace: agents find only chains they took part in. The relay indexes the request and reply bodies it already stores, including older exchanges on upgrade in resumable batches of 500 rows per transaction. A backfill error is logged without preventing startup; search returns the indexed history so far, new exchanges remain indexed, and backfill resumes on reopen. Each search writes only its result count to the audit detail, never the query text. Older relays return an upgrade message when search is requested.
+
+### Configure a webhook wake
+
+With webhook management installed on both relay and admin client (available in the next release after v0.18.1), configure a joined agent from the relay host or an admin device:
+
+```bash
+tincan wake set grokbot --webhook https://<host>/<hook> --bearer-token-stdin < /path/to/private-token
+tincan wake list
+```
+
+The relay writes `wake.json` atomically with mode 0600 and applies the change immediately. List returns agent names and methods only. Omitting `--bearer-token-stdin` preserves an existing token; empty input clears it. Existing HMAC, fallback and rate settings are preserved. For a relay with a custom state dir, pass `--socket <state-dir>/admin.sock`; remote admins can use `--relay <url>`. Other wake methods still use `wake.json`.
 
 ## Wake methods
 
@@ -1357,6 +1406,17 @@ For Claude: `tincan web install --site claude-ai` and `com.agenttincan.web.claud
 ## The Tincan Chrome extension
 
 A Manifest V3 extension (in [extension/](extension/), named "Agent Tincan History" in its manifest) that lets the history agent read, and the web agents send to, ChatGPT, claude.ai and (once granted) Grok, Gemini, Perplexity and Copilot through the owner's own logged-in Chrome.
+
+### Install from a release if the store is unavailable
+
+The [Web Store listing](https://chromewebstore.google.com/detail/goldflchpojcjmifnljlfkgoahjgeajn) and the unpacked build have different IDs. `ciejooalclcpgpapboofdbbddphldhnh` is the **unpacked build**, not a store listing.
+
+1. Download `tincan-history-extension.zip` from the [latest release](https://github.com/mvanhorn/agent-tincan/releases/latest), and `checksums.txt` from the same release.
+2. For releases after v0.18.1, verify the zip against its entry in `checksums.txt`. v0.18.1 and earlier do not publish an extension checksum.
+3. Unzip it into a permanent folder. Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the folder containing `manifest.json`.
+4. Confirm the ID is `ciejooalclcpgpapboofdbbddphldhnh`, then run `tincan history install --extension-dir /absolute/path/to/that/folder`.
+
+Keep the folder: Chrome loads the files from there. Updating an unpacked installation means replacing its files from a newer release and clicking **Reload** in Chrome. Extension 0.6.5 is required for the v0.18 usage-limit detection.
 
 What it can do:
 

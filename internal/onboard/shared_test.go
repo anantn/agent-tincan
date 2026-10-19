@@ -94,7 +94,7 @@ func TestOtherKindsUnchangedByConfigRules(t *testing.T) {
 	k := build(t, Options{RelayURL: relayURL, Roster: roster})
 	for _, kind := range kinds {
 		txt := blockText(block(t, k, "a-"+kind))
-		if strings.Contains(txt, "TINCAN_CONFIG") || strings.Contains(txt, " --name ") {
+		if strings.HasPrefix(block(t, k, "a-"+kind).Join, "TINCAN_CONFIG") || strings.Contains(txt, " --name ") {
 			t.Errorf("%s block should not carry per-agent config rules:\n%s", kind, txt)
 		}
 	}

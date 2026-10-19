@@ -319,7 +319,7 @@ func (c *copilotBrowser) Exchange(ctx context.Context, req NativeRequest, recv f
 		n := len(c.convs[id])
 		now := time.Now()
 		c.convs[id] = append(c.convs[id], &copilotTurn{
-			prompt: req.Args.Message, answer: "Copilot says: " + req.Args.Message,
+			prompt: req.Args.Message, answer: "Copilot says: " + unmarkedTestMessage(req.Args.Message),
 			userID: fmt.Sprintf("u-%s-%d", id[len(id)-3:], n), botID: fmt.Sprintf("b-%s-%d", id[len(id)-3:], n),
 			at: now, lag: c.lag, grow: c.grow,
 		})
@@ -397,6 +397,9 @@ func TestCopilotWebReplyWithSources(t *testing.T) {
 		t.Fatalf("%s %q", res.Status, res.Reply.Body)
 	}
 	got := b.sent()
+	for i := range got {
+		got[i].Message = unmarkedTestMessage(got[i].Message)
+	}
 	if len(got) != 3 || got[1] != (OpArgs{Message: "and with wire?", ConversationID: id}) || got[2] != (OpArgs{Message: "peek", ConversationID: id}) {
 		t.Fatalf("sends %+v", got)
 	}

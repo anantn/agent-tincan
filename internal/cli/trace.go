@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -100,13 +101,26 @@ func formatTrace(tr traceResp) string {
 			fmt.Fprintf(&b, "  %s\n", client.FormatProgress(st.Progress))
 		}
 		if st.Reply != nil {
-			fmt.Fprintf(&b, "%s  reply from %s: %s\n", strings.Repeat("  ", max(st.Request.Hop-1, 0)), st.Reply.From, oneLine(st.Reply.Body))
+			fmt.Fprintf(&b, "%s  reply from %s: %s (status %s)\n", strings.Repeat("  ", max(st.Request.Hop-1, 0)), st.Reply.From, oneLine(st.Reply.Body), st.Reply.Status)
 		}
 	}
 	if len(tr.Events) > 0 {
 		b.WriteString("Events:\n")
 		for _, e := range tr.Events {
-			fmt.Fprintf(&b, "  #%d %-9s %-10s %s\n", e.Seq, e.Event, e.Actor, e.RequestID)
+			detail := ""
+			var fields struct {
+				Status string `json:"status"`
+				Reason string `json:"reason"`
+			}
+			if json.Unmarshal([]byte(e.Detail), &fields) == nil {
+				if e.Event == "replied" && fields.Status != "" {
+					detail = " (reply status " + fields.Status + ")"
+				}
+				if e.Event == "rejected" && fields.Reason != "" {
+					detail = " (" + oneLine(fields.Reason) + ")"
+				}
+			}
+			fmt.Fprintf(&b, "  #%d %-9s %-10s %s%s\n", e.Seq, e.Event, e.Actor, e.RequestID, detail)
 		}
 	}
 	return b.String()

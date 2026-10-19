@@ -281,12 +281,12 @@ var dotPrimary = func(ctx context.Context) (history.DotPrimary, error) {
 }
 
 func webInstallCmd() *cobra.Command {
-	var site, binary, thread string
+	var site, binary, thread, name, configPath string
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Write the service definition for a web agent (never starts it)",
 		Long: "Writes a launchd agent on macOS (a systemd user unit on Linux) that runs tincan web serve --site <site>\n" +
-			"with TINCAN_CONFIG=~/.config/tincan/<agent>.json, and prints the command that starts it. The Tincan\n" +
+			"with the selected config path and --name (default: site agent name), and prints the start command. The Tincan\n" +
 			"Chrome extension and its native host come from tincan history install.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -308,18 +308,43 @@ func webInstallCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			res, err := history.InstallWebService(src, history.ServiceOptions{Binary: binary, Thread: thread})
+			if name == "" {
+				name = history.WebAgentName(src)
+			}
+			if configPath == "" {
+				configPath = serviceConfigPath(name)
+			}
+			configPath, err = filepath.Abs(expandHome(configPath))
 			if err != nil {
 				return err
 			}
-			agent := history.WebAgentName(src)
+			cfg, err := client.LoadConfigFrom(configPath)
+			if err != nil {
+				return err
+			}
+			if cfg.Agent != "" && cfg.Agent != name {
+				return wrongServeAgent("web install", name, configPath+" is joined as", cfg.Agent)
+			}
+			res, err := history.InstallWebService(src, history.ServiceOptions{Binary: binary, Thread: thread, AgentName: name, ConfigPath: configPath})
+			if err != nil {
+				return err
+			}
+			agent := name
 			cmd.Printf("%s service definition: %s (not started)\n", agent, res.Path)
-			cmd.Printf("join it first (if not yet):\n  TINCAN_CONFIG=~/.config/tincan/%s.json tincan join <code> --relay <relay url>\n", agent)
+			home, _ := os.UserHomeDir()
+			joinConfig := "~/.config/tincan/" + agent + ".json"
+			if configPath != filepath.Join(home, ".config", "tincan", agent+".json") {
+				joinConfig = "'" + strings.ReplaceAll(configPath, "'", "'\\''") + "'"
+			}
+			cmd.Printf("join it first (if not yet):\n  TINCAN_CONFIG=%s tincan join <code> --relay <relay url>\n", joinConfig)
+			cmd.Printf("config: %s (keep this path for join and every later call)\n", configPath)
 			cmd.Printf("start it with:\n  %s\n", res.Next)
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&site, "site", "", history.WebSiteNames())
+	cmd.Flags().StringVar(&name, "name", "", "invited agent name (default: site web agent name)")
+	cmd.Flags().StringVar(&configPath, "config", "", "client config saved into the service (default: TINCAN_CONFIG or ~/.config/tincan/<name>.json)")
 	cmd.Flags().StringVar(&binary, "binary", "", "tincan binary the service runs (default: this executable)")
 	cmd.Flags().StringVar(&thread, "thread", "", "--site dots only: the dot's thread id, kept in the service definition (default: the thread of the account's primary dot, from the Chrome extension)")
 	return cmd

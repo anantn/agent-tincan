@@ -264,3 +264,9 @@ These seven fixed operations accept no arguments and return only `{}` on positiv
 | `gemini.session` | None (`{}`) | Fetches `https://gemini.google.com/app` fresh and checks its session token and build label; those values stay in worker memory. |
 | `perplexity.session` | None (`{}`) | Reads `GET https://www.perplexity.ai/api/auth/session` and requires a signed-in `user` with an `id`; user fields are not returned. |
 | `copilot.session` | None (`{}`) | Opens its own background tab at `https://copilot.com/chat`, checks the rendered page for a signed-in account using the send gate, then closes the tab without typing or sending. |
+
+## Release zip installation fallback
+
+If the Chrome Web Store listing is unavailable, download `tincan-history-extension.zip` from the same GitHub release as your binary, unzip to a permanent folder, and use Chrome's `chrome://extensions` → Developer mode → Load unpacked. Select the folder containing `manifest.json`, then run `tincan history install --extension-dir /absolute/path/to/folder`.
+
+The expected unpacked ID is `ciejooalclcpgpapboofdbbddphldhnh`; the store build uses `goldflchpojcjmifnljlfkgoahjgeajn`. Both are accepted by the native host. Releases after v0.18.1 include the extension zip in `checksums.txt`; v0.18.1 and earlier do not. Verify the entry from the same release when present, and click Reload in Chrome after replacing an unpacked installation's files.

@@ -108,7 +108,7 @@ func TestChannelAnnouncesRequestWithoutClaiming(t *testing.T) {
 	sent, _ := inst.Send(ctx, "muse", "call the dentist", envelope.KindAsk, "", false)
 	select {
 	case params := <-got:
-		for _, want := range []string{"1 Agent Tincan item waiting from instinct", "check_inbox", `"from":"instinct"`, `"count":"1"`, sent.ID} {
+		for _, want := range []string{"1 Agent Tincan item waiting from instinct", "check_inbox", "select:mcp__agent-tincan__check_inbox,mcp__agent-tincan__reply", `"from":"instinct"`, `"count":"1"`, sent.ID} {
 			if !strings.Contains(params, want) {
 				t.Fatalf("channel event missing %q: %s", want, params)
 			}

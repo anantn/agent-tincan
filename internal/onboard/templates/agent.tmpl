@@ -26,7 +26,7 @@ local tincan mcp, and only tincan connect <name> on an admin device rejoins
 them; Gateway is set for them.
 */ -}}
 
-{{- define "cfgpath"}}~/.config/tincan/{{if .Service}}{{.Kind}}{{else}}{{.Name}}{{end}}.json{{end -}}
+{{- define "cfgpath"}}~/.config/tincan/{{if and .Service (or (not (isWebKind .Kind)) (eq .Name "<name>"))}}{{.Kind}}{{else}}{{.Name}}{{end}}.json{{end -}}
 {{- define "cfg"}}{{if .OwnConfig}}TINCAN_CONFIG={{template "cfgpath" .}} {{end}}{{end -}}
 {{- define "mcpenv"}}env TINCAN_CONFIG set to the full path of {{template "cfgpath" .}} (MCP configs do not expand ~){{end -}}
 {{- define "setup.cfghint" -}}
@@ -61,6 +61,7 @@ When you ask a teammate while handling a request, pass the request id you are ha
 {{- if eq .Kind "vm-webhook"}}
 If ~/.local/bin/tincan-up.sh exists on this machine, run it at the start of every turn, before check_inbox or anything else; if it does not, skip this step. It brings Tailscale and the relay back after this machine is rebuilt and changes nothing when they are up. If it exits non-zero, tell {{.Owner}} the exit code and its output (docs/adapters/grokbot.md, section 3, lists the codes), then carry on with check_inbox.
 {{- end}}
+{{if not .Gateway}}Keep the config path printed by tincan join: on macOS the CLI default is ~/Library/Application Support/tincan/client.json; on Linux it is ${XDG_CONFIG_HOME:-~/.config}/tincan/client.json. A TINCAN_CONFIG path in this kit is an explicit per-agent override, not the platform default. Use the same path for join, MCP, listeners and rejoin.{{end}}
 At the start of each turn and on any wake, call check_inbox (or run tincan inbox) first, before anything else, to pick up waiting requests.
 One exception to not asking: if a request would spend money or contact someone in a way you would normally confirm with {{.Owner}}, confirm with {{.Owner}} first, and post progress on the request while you wait.
 {{- if not .Gateway}}
@@ -123,6 +124,7 @@ If you joined with --proxy, add the same --proxy to tincan rejoin.
 {{- end -}}
 
 {{- define "instructions.claude-code" -}}
+If Agent Tincan tools are deferred, load them with ToolSearch select:mcp__agent-tincan__check_inbox,mcp__agent-tincan__reply before draining the inbox.
 A channel message from source "agent-tincan" means teammate requests, or a reply to your own request, are waiting. It carries only a count and senders, and nothing is claimed yet: call check_inbox to take them, handle each request and call reply, and finish any work that was waiting on a reply. If check_inbox is empty, another session already took them. Without --channel, tincan mcp wakes an idle session through its own messaging socket instead: the same notice arrives as a user message, and you handle it the same way. If a listener opened this session for you, call check_inbox first.
 {{- end -}}
 
@@ -440,7 +442,7 @@ Check it from another agent: tincan ask {{.Name}} 'note: {"op":"search","query":
 {{- end -}}
 
 {{- define "setup.web" -}}
-Name the agent {{.Kind}} when you invite it: tincan web serve and its service expect that name (pass --name to tincan web serve for another).
+Invite with kind {{.Kind}}. The default name is {{.Kind}}; web install --name and web serve --name support another invited name. Keep the join config for that name.
 Run it on the machine where {{.Owner}} uses Chrome, logged in to {{template "websitefull" .}}. It types each request into that site as {{.Owner}}, in a background tab the Tincan Chrome extension opens and closes; the chats show up in {{.OwnerPoss}} history there.
 It needs the Tincan Chrome extension and its native host, the same ones the history agent uses: install the extension, then run tincan history install once (it also writes the history service definition; pass --no-service if you do not run history).
 {{- if eq .Kind "grok-web"}}
@@ -450,14 +452,14 @@ A step for {{.Owner}} (Chrome takes the grant only from a click in the browser):
 {{- if eq .Kind "dot-web"}}
 Find the dot's thread id: with Chrome open and signed in to chatgpt.com, tincan web install --site dots asks the extension for the account's primary dot and prints the thread it uses (the dot's address no longer shows it). A dot has one DM, so every request goes into that thread; tincan web serve refuses --site dots without --thread <id>, which the installed service passes.
 {{- end}}
-Write the service definition: tincan web install --site {{template "websiteflag" .}}. It writes a launchd agent on macOS (a systemd user unit on Linux) and prints the command that starts it. It starts nothing itself.
-Start the service with the printed command (macOS: launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.agenttincan.web.{{template "websiteflag" .}}.plist).
+Write the service definition: {{template "cfg" .}}tincan web install --site {{template "websiteflag" .}} --name {{.Name}}. It writes a launchd agent on macOS (a systemd user unit on Linux) and prints the command that starts it. It starts nothing itself.
+Start the service with the exact command it prints; the default macOS file is com.agenttincan.web.{{template "websiteflag" .}}.plist, and a custom name has its own filename.
 On the relay host, in wake.json: set {{.Name}} to method "wait"; the service long-polls the relay. No secret fields.
-Without an allowlist file, every agent joined to the relay may ask. To restrict it, list the agents that may ask in ~/.config/tincan/{{.Kind}}-allow.txt, one agent name per line (a * entry means every joined agent); then every agent in a request's chain must be on it (docs/adapters/web-agents.md). The file is reread on every request.
+Without an allowlist file, every agent joined to the relay may ask. To restrict it, list the agents that may ask in ~/.config/tincan/{{.Name}}-allow.txt, one agent name per line (a * entry means every joined agent); then every agent in a request's chain must be on it (docs/adapters/web-agents.md). The file is reread on every request.
 {{- if ne .Kind "dot-web"}}
 Threading: a first line "new chat" starts a new conversation, "conversation: <id>" continues that one, and anything else continues the conversation that asker used last.
 {{- end}}
-If the service log (~/Library/Logs/tincan-{{.Kind}}.log on macOS) says it is not joined, run {{template "rejoin" .}} and restart the service.
+If the service log (~/Library/Logs/tincan-{{.Name}}.log on macOS) says it is not joined, run {{template "rejoin" .}} and restart the service.
 Check it from another agent: tincan ask {{.Name}} "say hello in five words"
 {{- end -}}
 {{- define "websitefull"}}{{if eq .Kind "claude-web"}}claude.ai{{else if eq .Kind "grok-web"}}grok.com{{else if eq .Kind "gemini-web"}}gemini.google.com{{else if eq .Kind "perplexity-web"}}www.perplexity.ai{{else if eq .Kind "copilot-web"}}copilot.com (Microsoft Copilot, where copilot.microsoft.com leads){{else if eq .Kind "dot-web"}}chatgpt.com (where {{.OwnerPoss}} dot lives, at chatgpt.com/dots){{else}}chatgpt.com{{end}}{{end -}}
@@ -467,7 +469,7 @@ Check it from another agent: tincan ask {{.Name}} "say hello in five words"
 {{- define "setup.gemini-web"}}{{template "setup.web" .}}
 Gemini is an optional site in the extension: grant it once on the extension's options page (chrome://extensions > Agent Tincan History > Details > Extension options > Grant next to Gemini; it also grants lh3.googleusercontent.com, where Gemini's images are served). Until then tincan web serve --site gemini waits while the extension is connected, checking again every minute, and starts serving as soon as the grant appears; requests get a reply naming the options page.
 Account risk: Google's terms do not allow automated access to Gemini. {{.Name}} acts as {{.Owner}} on {{.OwnerPoss}} own account at a human pace, one request at a time, but Google enforcement is not limited to Gemini and can reach the whole Google account. Decide whether that risk is acceptable before starting it.
-Data reach: Gemini answers can draw on the Google apps connected to {{.OwnerPoss}} account (Gmail, Drive and Calendar among them), so any agent allowed to ask {{.Name}} can read that data through it. Create ~/.config/tincan/{{.Kind}}-allow.txt listing only the agents that should, or disconnect those apps in Gemini's settings.
+Data reach: Gemini answers can draw on the Google apps connected to {{.OwnerPoss}} account (Gmail, Drive and Calendar among them), so any agent allowed to ask {{.Name}} can read that data through it. Create ~/.config/tincan/{{.Name}}-allow.txt listing only the agents that should, or disconnect those apps in Gemini's settings.
 It uses the first Google account signed in to Chrome (gemini.google.com/app, not /u/1/); conversations of another signed-in account are not found.
 {{- end -}}
 {{- define "setup.perplexity-web"}}{{template "setup.web" .}}
