@@ -149,7 +149,7 @@ A6. Invite the rest of the team. Ask your owner which agents to add (for example
 
 A7. Wakes. Agents that sleep between turns are woken by the relay. Webhook and
     email wakes are configured in wake.json in the relay state dir (chmod 600).
-    With the next release after v0.18.1 on relay and client, set webhook wakes
+    With v0.18.2 or later on relay and client, set webhook wakes
     from the relay host or an admin device without restarting the relay:
         tincan wake set <agent> --webhook <url> --bearer-token-stdin < /path/to/private-token
         tincan wake list
@@ -355,7 +355,7 @@ C3. Get three invite codes from the relay (PART A6) with kinds history,
         TINCAN_CONFIG=~/.config/tincan/claude-web.json  tincan join <CODE3> --relay http://tincan-relay
 
 C4. Web agents use the default names shown below. If invited under a different
-    name, use the next release after v0.18.1 and add --name <invited-name> to
+    name, use v0.18.2 or later and add --name <invited-name> to
     web install, with TINCAN_CONFIG set to the same file used at join. The
     service keeps that name and config; --name also exists on web serve.
     Install the services (each prints how to start and keep it running):
