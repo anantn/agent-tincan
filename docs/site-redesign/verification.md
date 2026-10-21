@@ -2,7 +2,7 @@
 
 Release state: preview only. Production has not been promoted.
 
-Latest preview: https://agenttincan-g8j79nicx-mvanhorns-projects.vercel.app (Vercel authentication required). Deployment `dpl_5R1aKcuoJrV6tPfqSAVecBxenViR`.
+Latest preview: https://agenttincan-em5dj3oai-mvanhorns-projects.vercel.app (Vercel authentication required). Deployment `dpl_2FRe6SxN6Lsa9MNAxT5SQtg6p5GT`.
 
 ## Verified
 
@@ -11,7 +11,9 @@ Latest preview: https://agenttincan-g8j79nicx-mvanhorns-projects.vercel.app (Ver
 - Native Safari desktop: generated hero cans, header stars, phone composition and request scene inspected. Chrome Canary responsive: 320px and 440px phone compositions inspected; forward scrolling advances examples through Second opinion; motion-off retains the selected full transcript. Live GitHub response displayed 334 stars.
 - Image review: all three generated images and the social card inspected. The phone image is transparent outside its frame.
 - Original deployment restored in a protected Vercel preview. `/agents.txt`, `/llms.txt`, and `/install.sh` compare byte-for-byte with baseline; homepage differs only by Vercel’s injected preview toolbar.
-- No runtime framework or animation dependency added. Generated WebP artwork totals 216,112 bytes; later demo artwork is lazy-loaded. The launch video uses native controls and `preload=none`. JS/CSS total 25,369 bytes gzip across the ordered modules, below the 200KB budget. These are asset sizes, not real-user performance metrics.
+- No runtime framework or animation dependency added. Generated WebP artwork totals 216,112 bytes; later demo artwork is lazy-loaded. The launch video uses native controls and `preload=metadata`. JS/CSS total 25,514 bytes gzip across the ordered modules, below the 200KB budget. These are asset sizes, not real-user performance metrics.
+
+The launch film is now embedded in the opening hero, beside the introduction on desktop and below it on mobile, replacing the decorative hero cans. Native controls expose playback and sound directly; the lower-page collapsed film was removed. Focused tests pass after this change; its final visual check remains blocked by unavailable browser windows.
 
 ## Review and corrections
 
