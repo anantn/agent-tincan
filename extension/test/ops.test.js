@@ -1637,6 +1637,23 @@ test('duet.send hooks: ready waits while Claude works and then fails busy; befor
   await assert.rejects(hooks.ready(), (e) => e.code === 'channel_refused');
 });
 
+test('duet.send hooks: ready types only once a read confirms Claude is not working, and never waits past the send deadline', async () => {
+  let hooks;
+  const sender = { send: async (_site, _a, h) => ((hooks = h), { conversation_id: DUET_CHAN, url: '', submitted_at: 1 }), close: async () => ({ closed: 0 }) };
+  const routes = duetRoutes();
+  // A stream that is not an event stream says nothing about working.
+  routes[DUET_STREAM] = () => jsonResponse({});
+  await run(createRunner({ fetch: fakeFetch(routes), sender, duetBusyWaitMs: 30, duetBusyPollMs: 10 }), 'duet.send', { message: 'hi', conversation_id: DUET_CHAN });
+  await assert.rejects(hooks.ready(), (e) => e.code === 'busy' && e.message === 'working state unknown');
+  // Claude working, with the send's deadline already near: ready fails at
+  // once rather than waiting out duetBusyWaitMs.
+  routes[DUET_STREAM] = () => streamResponse('event: session_activity\ndata: {"session_id":"a","working":true}\n\n');
+  await run(createRunner({ fetch: fakeFetch(routes), sender, duetBusyWaitMs: 60 * 1000, duetBusyPollMs: 10 }), 'duet.send', { message: 'hi', conversation_id: DUET_CHAN });
+  const t0 = Date.now();
+  await assert.rejects(hooks.ready(Date.now() + 5), (e) => e.code === 'busy');
+  assert.ok(Date.now() - t0 < 1000, 'ready waited past the deadline');
+});
+
 test('duet ops need the claude.ai grant; duet.close goes to the sender for its own site', async () => {
   const closed = [];
   const sender = { send: async () => ({}), close: async (site, id) => (closed.push([site, id]), { closed: 1 }) };

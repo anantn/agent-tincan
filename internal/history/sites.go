@@ -134,6 +134,10 @@ type feedWords struct {
 	url string
 	// from is who an ask came from, in its body ("the owner's dot").
 	from string
+	// working is set when every read says whether the assistant is
+	// working: a read that cannot tell then counts as working, so a reply
+	// finishes only once a read confirms the assistant stopped.
+	working bool
 }
 
 // ConversationName is how a web agent's reply footer names a site's

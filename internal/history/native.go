@@ -407,6 +407,10 @@ var (
 	ErrBusy = errors.New("busy")
 )
 
+// BusyUnknown is the extension's busy detail when it could not tell
+// whether the assistant is working before a send's wait ran out.
+const BusyUnknown = "working state unknown"
+
 // OptionsPageHint says where the extension's site grants are made.
 const OptionsPageHint = "chrome://extensions > Agent Tincan History > Details > Extension options"
 
@@ -475,6 +479,9 @@ func (e *UnavailableError) Error() string {
 		}
 	case ErrBusy:
 		reason = siteLabel(e.Source) + " is still working on something else; ask again when it is done"
+		if e.Detail == BusyUnknown {
+			reason = "tincan could not tell whether " + siteLabel(e.Source) + " is working; ask again later"
+		}
 	case ErrRateLimited:
 		// The detail (a URL path, a cooldown note) adds nothing for the
 		// reader.

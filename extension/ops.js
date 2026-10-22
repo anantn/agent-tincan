@@ -1240,10 +1240,12 @@ export function createRunner({ fetch, sender = null, reload = null, permissions 
 
   // duetHooks are the sender's feed hooks for one send of message into
   // chan: page, the channel the sender opens and checks the tab's address
-  // against; ready, called in the queued send right before the fill, reads
-  // the channel record again once (refusing a channel shared since) and
-  // waits up to duetBusyWaitMs while Claude is working, then fails busy with
-  // nothing typed; before, right before each click, reads the record again
+  // against; ready(deadline), called in the queued send right before the
+  // fill, reads the channel record again once (refusing a channel shared
+  // since) and waits, up to duetBusyWaitMs and never past the send's
+  // deadline, until a read confirms Claude is not working: while Claude is
+  // working it fails busy, and while no read can tell it fails busy with
+  // the detail "working state unknown", nothing typed either way; before, right before each click, reads the record again
   // and notes the timeline's message ids; confirm returns the id of the
   // first owner message not among them whose text is the message and
   // whose time is not before the click (less DOT_SKEW_MS), or null.
@@ -1253,12 +1255,15 @@ export function createRunner({ fetch, sender = null, reload = null, permissions 
     let ch = null;
     return {
       page: chan,
-      async ready() {
-        const end = Date.now() + duetBusyWaitMs;
+      async ready(deadline) {
+        const end = Math.min(Date.now() + duetBusyWaitMs, Number.isFinite(deadline) ? deadline : Infinity);
         await duetChannel(auth, chan);
         for (;;) {
-          if ((await duetWorking(auth, chan)) !== true) return;
-          if (Date.now() + duetBusyPollMs > end) throw new OpError('busy', 'Claude is still working in the Duet channel; nothing was sent');
+          const working = await duetWorking(auth, chan);
+          if (working === false) return;
+          if (Date.now() + duetBusyPollMs > end) {
+            throw new OpError('busy', working === true ? 'Claude is still working in the Duet channel; nothing was sent' : 'working state unknown');
+          }
           await new Promise((resolve) => setTimeout(resolve, duetBusyPollMs));
         }
       },

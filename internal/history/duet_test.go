@@ -149,6 +149,12 @@ func TestDuetNodesFollowTheWorkingFlag(t *testing.T) {
 	if p := progressOf(nodes, replyAnchor{bound: "m1"}); !p.found || p.finished || p.busy || !strings.Contains(p.sig, "On it") || strings.Contains(p.sig, "interjection") {
 		t.Fatalf("done: progress %+v", p)
 	}
+	// A read that cannot tell whether Claude is working counts as working.
+	raw := strings.Replace(string(duetDetailJSON(false, items...)), `"working":false`, `"working":null`, 1)
+	nodes, _ = duetNodes(json.RawMessage(raw))
+	if p := progressOf(nodes, replyAnchor{bound: "m1"}); !p.busy || p.finished {
+		t.Fatalf("unknown: progress %+v", p)
+	}
 	// Another member writing after the owner does not orphan the request.
 	nodes, _ = duetNodes(duetDetailJSON(true, items[:2]...))
 	if p := progressOf(nodes, replyAnchor{bound: "m1"}); p.orphaned || p.found {
@@ -199,6 +205,15 @@ func TestDuetWebNotWorkingStillWaitsForTheText(t *testing.T) {
 	res := rig.ask(t, "codex", "what changed?")
 	if res.Status != envelope.StatusAnswered || !strings.HasPrefix(res.Reply.Body, "On it\n\nThree things changed.") {
 		t.Fatalf("%s %q", res.Status, res.Reply.Body)
+	}
+}
+
+// A send that could not tell whether Claude is working fails with nothing
+// sent and says so.
+func TestDuetWebUnknownWorkingSaysNothingWasSent(t *testing.T) {
+	err := &UnavailableError{Source: SourceDuet, Kind: ErrBusy, Detail: BusyUnknown}
+	if got := err.Error(); !strings.Contains(got, "could not tell whether Claude Duet is working") {
+		t.Fatal(got)
 	}
 }
 

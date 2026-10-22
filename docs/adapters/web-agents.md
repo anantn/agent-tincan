@@ -398,9 +398,9 @@ and start it with the command it prints (or run `tincan web serve --site duet --
 
 It works as [Asking the dot](#asking-the-dot) describes, with these differences:
 
-- Before typing, the extension waits up to 2 minutes for Claude to finish whatever it is doing in the chat, then fails with "Nothing was sent: Claude Duet is still working on something else; ask again when it is done."
+- Before typing, the extension waits up to 2 minutes for Claude to finish whatever it is doing in the chat, then fails with "Nothing was sent: Claude Duet is still working on something else; ask again when it is done." If the extension cannot read whether Claude is working, it types nothing and fails the same way, saying it could not tell.
 - The message box is typed into and Send clicked in a background tab of `https://claude.ai/messages/<id>`; the send is confirmed by your new message appearing in the chat's timeline.
-- The answer is every message Claude posts after the request, joined in order. Claude often posts an "On it" first and the answer later, so the agent reads whether Claude is still working from the chat's event stream (the `session_activity` events) and waits while it is; Claude stops working a few seconds after its last message. Messages from anyone else are never part of the answer.
+- The answer is every message Claude posts after the request, joined in order. Claude often posts an "On it" first and the answer later, so the agent reads whether Claude is still working from the chat's event stream (the `session_activity` events) and waits while it is, or while a read cannot tell; Claude stops working a few seconds after its last message. Messages from anyone else are never part of the answer.
 
 Claude asking teammates, the setup message, the send allowlist (`~/.config/tincan/duet-web-send.txt`), the outbound state file (`~/.config/tincan/duet-web-out.json`), approval, council seats and `--teach` all work as they do for the dot, with "the channel" for "the DM". Only Claude's own messages start an ask: an `@tincan ask` line you write yourself is not asked. A teammate's ask from Claude ends with `(from the owner's Duet channel, ref dotask...)`.
 

@@ -973,10 +973,13 @@ export function createSender({
       // A feed-confirmed site's ready hook runs its last checks (a dot
       // paused while this send waited) before anything is typed.
       if (feed && typeof hooks.ready === 'function') {
-        await hooks.ready();
+        await hooks.ready(deadline);
         // ready reads the backend, so the page may have moved meanwhile:
-        // check its address again before anything is typed.
+        // check its address again before anything is typed. It may also
+        // have waited: a send past its deadline (the caller has been told
+        // it timed out) types nothing.
         if ((await urlId()) !== pageId) throw new OpError('not_found', 'conversation not found');
+        if (late()) throw new OpError('timeout', 'the send waited too long for the site to be ready; nothing was typed');
       }
       if (images) {
         inputActive();
@@ -1026,8 +1029,10 @@ export function createSender({
         if (feed) {
           await hooks.before();
           // before reads the backend, so the page may have moved meanwhile:
-          // check its address again right before the click.
+          // check its address again right before the click, and click
+          // nothing once the send is past its deadline.
           if ((await urlId()) !== pageId) throw new OpError('not_found', 'conversation not found');
+          if (late()) throw new OpError('timeout', 'the send ran past its deadline before the click; nothing was sent');
         }
         if (images) {
           inputActive();
