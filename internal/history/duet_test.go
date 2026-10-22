@@ -2,6 +2,7 @@ package history
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"strings"
 	"testing"
@@ -19,9 +20,7 @@ func duetDetailJSON(working bool, items ...map[string]any) json.RawMessage {
 	out := []map[string]any{}
 	for _, it := range items {
 		m := map[string]any{}
-		for k, v := range it {
-			m[k] = v
-		}
+		maps.Copy(m, it)
 		switch m["from"] {
 		case dotOwner:
 			m["role"] = "owner"
