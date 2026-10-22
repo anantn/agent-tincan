@@ -1750,3 +1750,46 @@ test('copilot send finishes while an idle session probe is still loading', async
   }
   assert.equal(fc.log.removed.includes(100), true, 'probe closes its own tab');
 });
+
+// ---- Claude Duet: the owner's 1:1 channel on claude.ai/messages, whose
+// composer is a textarea and whose send the timeline confirms.
+
+const DUET_CHAN = 'chan_0000000000000000chan01';
+const DUET_PAGE = `https://claude.ai/messages/${DUET_CHAN}`;
+const DUET_OWNER = 'user_owner';
+
+// duetFetch answers the organizations list, the channel record, its
+// timeline (newest first, with an owner message for each message a duet
+// page in fc took) and an idle event stream.
+function duetFetch(fc) {
+  const fn = async (url) => {
+    const u = String(url);
+    if (u === 'https://claude.ai/api/organizations') return jsonResponse([{ uuid: '11111111-2222-4333-8444-555555555555', capabilities: ['chat'] }]);
+    const base = `https://claude.ai/v1/code/channels/${DUET_CHAN}`;
+    if (u === base) return jsonResponse({ channel: { id: DUET_CHAN, name: 'research', agent_id: 'cagt_a', visibility: 'private', members: [], guests: [], archived_at: null, disabled_at: null, membership: { account_id: DUET_OWNER, role: 'owner' } } });
+    if (u.startsWith(`${base}/timeline?limit=`)) {
+      const data = [{ id: 'cmsg_old', created_at: '2026-10-01T00:00:00Z', author_agent_id: 'cagt_a', body: 'earlier answer', in_timeline: true, thread_status: 'idle' }];
+      [...fc.tabs.values()].filter((p) => p.site === 'duet').flatMap((p) => p.submitted).forEach((t, i) => {
+        data.unshift({ id: `cmsg_new${i + 1}`, created_at: new Date().toISOString(), author_account_id: DUET_OWNER, body: t, in_timeline: true, thread_status: 'idle' });
+      });
+      return jsonResponse({ data });
+    }
+    if (u === `${base}/messages/stream?from=tail`) return new Response('event: session_activity\ndata: {"working":false}\n\nevent: session_model\ndata: {}\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    return jsonResponse({ detail: 'not found' }, 404);
+  };
+  return fn;
+}
+
+test('duet.send types into the channel textarea, clicks Send, and returns the new owner message id from the timeline', async () => {
+  let page;
+  const fc = fakeChrome((url) => (page = new FakeSite('duet', url, { noId: true, neverFinish: true, textarea: true })));
+  const r = createRunner({ fetch: duetFetch(fc), sender: sender(fc) });
+  const frames = [];
+  await r.run('duet.send', { message: 'what changed this week?', conversation_id: DUET_CHAN }, (x) => frames.push(x));
+  assert.equal(fc.log.created[0].url, DUET_PAGE);
+  assert.equal(fc.log.created[0].active, false, 'background tab');
+  assert.deepEqual(page.submitted, ['what changed this week?']);
+  assert.equal(frames[0].result.conversation_id, DUET_CHAN);
+  assert.equal(frames[0].result.message_id, 'cmsg_new1');
+  assertOnlyFixedScripts(fc.log);
+});
