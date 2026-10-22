@@ -1517,7 +1517,7 @@ test('duet.detail reads the channel and its timeline oldest first, with each aut
   ]);
   // Only the organizations list and paths under the channel are fetched,
   // each channel request with the organization and API version headers.
-  assert.deepEqual(f.calls.map((c) => c.url), [DUET_ORGS, DUET_CHANNEL, DUET_TIMELINE, DUET_STREAM]);
+  assert.deepEqual(f.calls.map((c) => c.url), [DUET_ORGS, DUET_CHANNEL, DUET_STREAM, DUET_TIMELINE]);
   for (const c of f.calls.slice(1)) {
     assert.ok(c.url.startsWith(DUET_CHANNEL));
     assert.equal(c.init.headers['x-organization-uuid'], DUET_ORG);
@@ -1563,6 +1563,17 @@ test('duet.detail refuses a shared, archived, disabled or foreign channel with c
     await assert.rejects(run(createRunner({ fetch: fakeFetch(duetRoutes({ [DUET_CHANNEL]: duetChannelWith(over) })) }), 'duet.detail', { id: DUET_CHAN }), (e) => ((caught = e), e.code === 'channel_refused'), JSON.stringify(over));
     assert.match(errorFrame(caught).error.message, /#research/);
   }
+});
+
+test('duet.detail checks the channel on every read, so a channel shared since the last read is refused at once', async () => {
+  const routes = duetRoutes();
+  const f = fakeFetch(routes);
+  const runner = createRunner({ fetch: f });
+  await run(runner, 'duet.detail', { id: DUET_CHAN });
+  routes[DUET_CHANNEL] = duetChannelWith({ members: [{ account_id: 'user_someoneelse' }] });
+  await assert.rejects(run(runner, 'duet.detail', { id: DUET_CHAN }), (e) => e.code === 'channel_refused');
+  assert.equal(f.calls.filter((c) => c.url === DUET_CHANNEL).length, 2);
+  assert.equal(f.calls.filter((c) => c.url === DUET_TIMELINE).length, 1);
 });
 
 test('duet.detail: a malformed channel id is bad_request; missing fields are endpoint_changed; an unknown channel is not_found', async () => {

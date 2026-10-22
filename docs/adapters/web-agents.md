@@ -409,6 +409,7 @@ Claude asking teammates, the setup message, the send allowlist (`~/.config/tinca
 - Claude sometimes answers with only an emoji reaction instead of a message. Tincan reads messages, not reactions, so such a request waits until the request timeout and the asker is told to check the chat later.
 - Each read takes only the chat's latest 32 messages, as for the dot.
 - Messages in a Duet thread (replies under a message) are not read; only the chat's main timeline is.
+- When Claude stops to ask for your approval (an approval card), tincan does not see the card. The asker gets Claude's messages so far once they hold still, or, if Claude still counts as working, waits until the request timeout. Approve or deny in the chat yourself.
 - `duet-web` is not a history source: `tincan history` does not read Duet chats.
 
 ## Ask both web agents

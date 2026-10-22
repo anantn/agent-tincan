@@ -78,7 +78,8 @@ func duetNotLoggedIn(string) string {
 }
 
 // duetNodes reads the channel for the reply wait as feedNodes does: Claude
-// is done once the channel says it is no longer working.
+// is done once the channel says it is not working and its reply has held
+// still for the site's stability window.
 func duetNodes(raw json.RawMessage) ([]webNode, error) { return feedNodes(duetWords, raw) }
 
 // duetWords name Claude and its Duet channel.

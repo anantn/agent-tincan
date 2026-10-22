@@ -157,8 +157,9 @@ var dotsWords = &feedWords{who: "your dot", them: "the dot", theirs: "the dot's"
 // feedNodes reads a one-thread site's feed as dotsNodes describes. A
 // message from anyone but the owner and the assistant is neither a turn
 // nor part of an answer. When the feed says whether the assistant is
-// working, that decides: a run is finished once it is not, and busy (so
-// text that holds still is not taken as finished) while it is.
+// working, a run is busy while it is, so text that holds still mid-run
+// is not taken as finished; once it is not, the text-stability rule
+// finishes the run, so a message posted just after the read still counts.
 func feedNodes(w *feedWords, raw json.RawMessage) ([]webNode, error) {
 	f, err := ParseDotFeed(raw)
 	if err != nil {
@@ -178,7 +179,7 @@ func feedNodes(w *feedWords, raw json.RawMessage) ([]webNode, error) {
 		}
 		n := dotRun(w, f.Thread, msgs[i:j])
 		if f.Working != nil {
-			n.busy, n.finished = *f.Working, !*f.Working
+			n.busy = *f.Working
 		}
 		out = append(out, n)
 		i = j

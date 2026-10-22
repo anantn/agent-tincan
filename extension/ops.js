@@ -213,10 +213,6 @@ const DUET_API_VERSION = '2023-06-01';
 // reads, DUET_CONFIRM_LIMIT how many a send's confirmation polls read.
 export const DUET_FEED_LIMIT = 32;
 const DUET_CONFIRM_LIMIT = 20;
-// DUET_CHANNEL_TTL_MS is how long duet.detail reuses a channel record (so
-// a channel shared since is refused at most this late; a send reads it
-// fresh before typing and again before its click).
-const DUET_CHANNEL_TTL_MS = 60 * 1000;
 // DUET_STREAM_MS caps the one read of the event stream duetWorking makes.
 export const DUET_STREAM_MS = 4000;
 // DUET_BUSY_WAIT_MS is how long a send waits for Claude to stop working
@@ -878,9 +874,6 @@ export function createRunner({ fetch, sender = null, reload = null, permissions 
   // dotRooms caches dots.detail's dotRoom answer per thread:
   // { room, owner, paused, at }.
   const dotRooms = new Map();
-  // duetChannels caches duet.detail's duetChannel answer per channel:
-  // { owner, agent, at }.
-  const duetChannels = new Map();
 
   // scheduleReload reloads once the sender is idle, or at the cap after
   // closing its kept tabs. Timers are looked up at call time so tests can
@@ -1668,26 +1661,16 @@ export function createRunner({ fetch, sender = null, reload = null, permissions 
       if (d.paused) throw dotPausedErr();
       return sender.send('dots', a, dotHooks(auth, a.conversation_id, d, a.message));
     },
-    // The channel record is read once per DUET_CHANNEL_TTL_MS per channel;
-    // later reads fetch only the timeline and the stream. A refused or missing channel
-    // drops the cached record.
+    // Every read checks the channel record, so a channel shared since the
+    // last read is refused at once. Whether Claude is working is read before
+    // the timeline: a "not working" answer then never comes with a timeline
+    // older than it, which would miss a message Claude posted in between.
     async 'duet.detail'(a) {
       const chan = duetChannelId(a.id);
       const auth = await duetAuth();
-      let ch = duetChannels.get(chan);
-      if (!ch || Date.now() - ch.at >= DUET_CHANNEL_TTL_MS) {
-        duetChannels.delete(chan);
-        ch = { ...(await duetChannel(auth, chan)), at: Date.now() };
-        duetChannels.set(chan, ch);
-      }
-      let f;
-      try {
-        f = await duetFeed(auth, chan, ch, DUET_FEED_LIMIT);
-      } catch (e) {
-        if (e instanceof OpError && (e.code === 'not_found' || e.code === 'endpoint_changed' || e.code === 'http_error')) duetChannels.delete(chan);
-        throw e;
-      }
+      const ch = await duetChannel(auth, chan);
       const working = await duetWorking(auth, chan);
+      const f = await duetFeed(auth, chan, ch, DUET_FEED_LIMIT);
       return { thread: chan, room: chan, owner: ch.owner, paused: false, working, items: f.items };
     },
     // A Duet channel has no new chat either, so the send needs its channel.
@@ -1702,7 +1685,6 @@ export function createRunner({ fetch, sender = null, reload = null, permissions 
       claudeOrg = null;
       const auth = await duetAuth();
       await duetChannel(auth, chan);
-      duetChannels.delete(chan);
       return sender.send('duet', a, duetHooks(auth, chan, a.message));
     },
     // close touches only tabs a send opened and left open.

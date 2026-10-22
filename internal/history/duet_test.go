@@ -127,8 +127,9 @@ func TestParseDotFeedReadsADuetChannel(t *testing.T) {
 	}
 }
 
-// Claude's run is finished once the channel says it is not working, and
-// busy (never finished) while it is; another member's message is no turn.
+// Claude's run is busy while the channel says it is working, and left to
+// the stability rule (never finished on one read) once it is not; another
+// member's message is no turn.
 func TestDuetNodesFollowTheWorkingFlag(t *testing.T) {
 	at := time.Date(2026, 10, 21, 5, 41, 0, 0, time.UTC)
 	items := []map[string]any{
@@ -145,7 +146,7 @@ func TestDuetNodesFollowTheWorkingFlag(t *testing.T) {
 		t.Fatalf("working: progress %+v", p)
 	}
 	nodes, _ = duetNodes(duetDetailJSON(false, items...))
-	if p := progressOf(nodes, replyAnchor{bound: "m1"}); !p.found || !p.finished || p.busy || !strings.Contains(p.sig, "On it") || strings.Contains(p.sig, "interjection") {
+	if p := progressOf(nodes, replyAnchor{bound: "m1"}); !p.found || p.finished || p.busy || !strings.Contains(p.sig, "On it") || strings.Contains(p.sig, "interjection") {
 		t.Fatalf("done: progress %+v", p)
 	}
 	// Another member writing after the owner does not orphan the request.
@@ -185,6 +186,19 @@ func TestDuetWebWaitsWhileClaudeWorks(t *testing.T) {
 	}
 	if len(b.closes) != 1 || b.closes[0] != duetChan {
 		t.Fatalf("closes %v", b.closes)
+	}
+}
+
+// A read that says Claude is not working while the channel still shows
+// only "On it" does not end the wait: Claude's answer posted on a later
+// read is part of the reply.
+func TestDuetWebNotWorkingStillWaitsForTheText(t *testing.T) {
+	rig, b := duetRig(t)
+	b.busyReads = 0
+	b.replies = []dotReply{{text: "On it", at: 1}, {text: "Three things changed.", at: 2}}
+	res := rig.ask(t, "codex", "what changed?")
+	if res.Status != envelope.StatusAnswered || !strings.HasPrefix(res.Reply.Body, "On it\n\nThree things changed.") {
+		t.Fatalf("%s %q", res.Status, res.Reply.Body)
 	}
 }
 
