@@ -1662,6 +1662,18 @@ test('duet.send hooks: ready types only once a read confirms Claude is not worki
   assert.ok(Date.now() - t0 < 1000, 'ready waited past the deadline');
 });
 
+test('duet.send hooks: a stalled timeline read in ready ends at the send deadline with nothing typed', async () => {
+  let hooks;
+  const sender = { send: async (_site, _a, h) => ((hooks = h), { conversation_id: DUET_CHAN, url: '', submitted_at: 1 }), close: async () => ({ closed: 0 }) };
+  const routes = duetRoutes();
+  routes[DUET_STREAM] = () => streamResponse('event: session_activity\ndata: {"session_id":"b","thread_root_id":"cmsg_0000000000000000000002","working":true}\n\nevent: session_model\ndata: {}\n\n');
+  await run(createRunner({ fetch: fakeFetch(routes), sender, duetBusyWaitMs: 60 * 1000, duetBusyPollMs: 10 }), 'duet.send', { message: 'hi', conversation_id: DUET_CHAN });
+  routes[DUET_TIMELINE] = (_u, init) => new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(new Error('aborted'))));
+  const t0 = Date.now();
+  await assert.rejects(hooks.ready(Date.now() + 50), (e) => e.code === 'busy' && e.message === 'working state unknown');
+  assert.ok(Date.now() - t0 < 1000, 'ready waited past the deadline');
+});
+
 test('duet ops need the claude.ai grant; duet.close goes to the sender for its own site', async () => {
   const closed = [];
   const sender = { send: async () => ({}), close: async (site, id) => (closed.push([site, id]), { closed: 1 }) };
