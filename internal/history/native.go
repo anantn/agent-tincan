@@ -198,6 +198,12 @@ const (
 	// OpDotsPrimary names the account's primary dot and its current
 	// thread, for web install (the dot's address no longer shows one).
 	OpDotsPrimary Op = "dots.primary"
+	// Claude Duet (a 1:1 channel on claude.ai/messages, under claude.ai's
+	// grant) fronts a web agent only, like a dot: no list, file or primary
+	// operation, and a send always names the channel.
+	OpDuetDetail Op = "duet.detail"
+	OpDuetSend   Op = "duet.send"
+	OpDuetClose  Op = "duet.close"
 	// OpExtensionReload is sent only by the native host itself, never
 	// relayed from the socket.
 	OpExtensionReload Op = "extension.reload"
@@ -392,7 +398,18 @@ var (
 	ErrBlocked = errors.New("blocked by an anti-bot check")
 	// ErrPaused: the owner's dot is paused, so nothing was sent to it.
 	ErrPaused = errors.New("paused")
+	// ErrRefused: the site refused the conversation itself (a Duet channel
+	// shared with other people, archived, or not the owner's), so nothing
+	// was sent to it. The detail says why.
+	ErrRefused = errors.New("conversation refused")
+	// ErrBusy: the assistant was still working on something else for
+	// longer than a send waits, so nothing was sent.
+	ErrBusy = errors.New("busy")
 )
+
+// BusyUnknown is the extension's busy detail when it could not tell
+// whether the assistant is working before a send's wait ran out.
+const BusyUnknown = "working state unknown"
 
 // OptionsPageHint says where the extension's site grants are made.
 const OptionsPageHint = "chrome://extensions > Agent Tincan History > Details > Extension options"
@@ -455,6 +472,16 @@ func (e *UnavailableError) Error() string {
 		reason = site + " showed an anti-bot check; open " + site + " in Chrome, complete the check, then try again"
 	case ErrPaused:
 		reason = siteLabel(e.Source) + " is paused; unpause it in ChatGPT and ask again"
+	case ErrRefused:
+		reason = e.Detail
+		if reason == "" {
+			reason = "the conversation was refused"
+		}
+	case ErrBusy:
+		reason = siteLabel(e.Source) + " is still working on something else; ask again when it is done"
+		if e.Detail == BusyUnknown {
+			reason = "tincan could not tell whether " + siteLabel(e.Source) + " is working; ask again later"
+		}
 	case ErrRateLimited:
 		// The detail (a URL path, a cooldown note) adds nothing for the
 		// reader.
@@ -462,7 +489,7 @@ func (e *UnavailableError) Error() string {
 	default:
 		reason = site + " request failed"
 	}
-	if e.Detail != "" && e.Kind != ErrChromeNotRunning && e.Kind != ErrExtensionNotConnected && e.Kind != ErrNotLoggedIn && e.Kind != ErrTimeout && e.Kind != ErrPermissionMissing && e.Kind != ErrPaused {
+	if e.Detail != "" && e.Kind != ErrChromeNotRunning && e.Kind != ErrExtensionNotConnected && e.Kind != ErrNotLoggedIn && e.Kind != ErrTimeout && e.Kind != ErrPermissionMissing && e.Kind != ErrPaused && e.Kind != ErrRefused && e.Kind != ErrBusy {
 		reason += " (" + e.Detail + ")"
 	}
 	return "source unavailable: " + string(e.Source) + ": " + reason
@@ -633,6 +660,10 @@ func nativeErrorKind(s Source, ne *NativeError) error {
 		return unavailable(s, ErrBlocked, detail)
 	case "paused":
 		return unavailable(s, ErrPaused, detail)
+	case "channel_refused":
+		return unavailable(s, ErrRefused, detail)
+	case "busy":
+		return unavailable(s, ErrBusy, detail)
 	case "permission_missing":
 		return unavailable(s, ErrPermissionMissing, detail)
 	case "bad_request":

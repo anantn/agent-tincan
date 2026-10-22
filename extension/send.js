@@ -1,8 +1,8 @@
 // Send operations for the Agent Tincan web agents (chatgpt.send,
 // claudeai.send, grok.send, gemini.send, perplexity.send, copilot.send,
-// dots.send) and the matching close operations (chatgpt.close,
+// dots.send, duet.send) and the matching close operations (chatgpt.close,
 // claudeai.close, grok.close, gemini.close, perplexity.close,
-// copilot.close, dots.close), plus the
+// copilot.close, dots.close, duet.close), plus the
 // in-page image capture gemini.file asks for (capture) and the Copilot
 // chat list read copilot.list asks for (readList).
 //
@@ -41,7 +41,9 @@
 // confirm, polled after it every feedPollMs for at most feedWaitMs until
 // it names the new owner message. A dots send needs its thread id, which
 // stays its conversation id, and never types over text already in the
-// composer (keepDraft).
+// composer (keepDraft). A Claude Duet channel works the same way: its page
+// is https://claude.ai/messages/<channel id>, the channel id is the
+// conversation id, and the timeline confirms the send.
 //
 // While that tab is still open, capture fetches one of Gemini's images
 // from inside it (the isolated world's fetch, with the page's cookies), so
@@ -215,6 +217,24 @@ export const SELECTORS = Object.freeze({
     loginPaths: ['/auth/login', '/log-in'],
     keepDraft: true,
   }),
+  // A Claude Duet channel on claude.ai/messages: a plain textarea whose
+  // placeholder names a named channel ("Message #<name>"), or, in the main
+  // Duet chat, whose aria-label is "Message Claude Duet", and a Send button
+  //. As in a dot's DM, the owner may be typing there too
+  // (keepDraft), and Claude's reply is read from the timeline by the Go
+  // side.
+  duet: Object.freeze({
+    composer: ['textarea[placeholder^="Message #"]', 'textarea[placeholder^="Message"]', 'textarea[aria-label^="Message"]'],
+    send: ['button[aria-label="Send"]'],
+    stop: [],
+    streaming: [],
+    assistant: [],
+    user: [],
+    notice: NOTICE,
+    login: ['a[href="/login"]', 'input[type="email"]'],
+    loginPaths: ['/login', '/logout'],
+    keepDraft: true,
+  }),
 });
 
 // SITES says where each site's pages are and how to read a conversation id
@@ -270,6 +290,15 @@ export const SITES = Object.freeze({
     newURL: 'https://chatgpt.com/',
     convURL: (id) => `https://chatgpt.com/dots/${encodeURIComponent(id)}`,
     idFrom: /^https:\/\/chatgpt\.com\/dots\/([A-Za-z0-9][A-Za-z0-9_-]{0,63}~[A-Za-z0-9][A-Za-z0-9_-]{0,63})(?:[/?#]|$)/,
+    needsConversation: true,
+    confirmByFeed: true,
+  }),
+  // A Duet channel is /messages/<channel id>; there is no new chat, and
+  // the timeline confirms the send, as for a dot.
+  duet: Object.freeze({
+    newURL: 'https://claude.ai/messages',
+    convURL: (id) => `https://claude.ai/messages/${encodeURIComponent(id)}`,
+    idFrom: /^https:\/\/claude\.ai\/messages\/(chan_[A-Za-z0-9]{8,64})(?:[/?#]|$)/,
     needsConversation: true,
     confirmByFeed: true,
   }),
@@ -944,10 +973,13 @@ export function createSender({
       // A feed-confirmed site's ready hook runs its last checks (a dot
       // paused while this send waited) before anything is typed.
       if (feed && typeof hooks.ready === 'function') {
-        await hooks.ready();
+        await hooks.ready(deadline);
         // ready reads the backend, so the page may have moved meanwhile:
-        // check its address again before anything is typed.
+        // check its address again before anything is typed. It may also
+        // have waited: a send past its deadline (the caller has been told
+        // it timed out) types nothing.
         if ((await urlId()) !== pageId) throw new OpError('not_found', 'conversation not found');
+        if (late()) throw new OpError('timeout', 'the send waited too long for the site to be ready; nothing was typed');
       }
       if (images) {
         inputActive();
@@ -997,8 +1029,10 @@ export function createSender({
         if (feed) {
           await hooks.before();
           // before reads the backend, so the page may have moved meanwhile:
-          // check its address again right before the click.
+          // check its address again right before the click, and click
+          // nothing once the send is past its deadline.
           if ((await urlId()) !== pageId) throw new OpError('not_found', 'conversation not found');
+          if (late()) throw new OpError('timeout', 'the send ran past its deadline before the click; nothing was sent');
         }
         if (images) {
           inputActive();
@@ -1185,7 +1219,7 @@ export function createSender({
 
   return {
     // send runs after any earlier send to the same site has finished.
-    // hooks ({before, confirm}) are for a feed-confirmed site (dots).
+    // hooks ({before, confirm}) are for a feed-confirmed site (dots, duet).
     send(site, args, hooks) {
       const accepted = now();
       return enqueue(site, () => run(site, args, accepted, hooks));
