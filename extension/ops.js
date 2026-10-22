@@ -1273,7 +1273,23 @@ export function createRunner({ fetch, sender = null, reload = null, permissions 
         const c = await duetChannel(auth, chan);
         for (;;) {
           const acts = await duetWorking(auth, chan);
-          const working = duetBusy(acts, (await duetFeed(auth, chan, c, DUET_FEED_LIMIT)).items);
+          // The timeline matters only when a thread's session is working;
+          // its read is bounded by what is left of the wait, so a stalled
+          // read cannot hold the send past its deadline.
+          let items = [];
+          if (Array.isArray(acts) && acts.some((s) => s.working && s.root !== '')) {
+            const ac = new AbortController();
+            const t = setTimeout(() => ac.abort(), Math.max(end - Date.now(), 0));
+            try {
+              items = (await duetFeed({ ...auth, signal: ac.signal }, chan, c, DUET_FEED_LIMIT)).items;
+            } catch (e) {
+              if (!ac.signal.aborted) throw e;
+              throw new OpError('busy', 'working state unknown');
+            } finally {
+              clearTimeout(t);
+            }
+          }
+          const working = duetBusy(acts, items);
           if (working === false) return;
           if (Date.now() + duetBusyPollMs > end) {
             throw new OpError('busy', working === true ? 'Claude is still working in the Duet channel; nothing was sent' : 'working state unknown');
