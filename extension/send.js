@@ -218,12 +218,13 @@ export const SELECTORS = Object.freeze({
     keepDraft: true,
   }),
   // A Claude Duet channel on claude.ai/messages: a plain textarea whose
-  // placeholder names the channel ("Message #<name>") and a Send button
-  // (both seen live). As in a dot's DM, the owner may be typing there too
+  // placeholder names a named channel ("Message #<name>"), or, in the main
+  // Duet chat, whose aria-label is "Message Claude Duet", and a Send button
+  // (all seen live). As in a dot's DM, the owner may be typing there too
   // (keepDraft), and Claude's reply is read from the timeline by the Go
   // side.
   duet: Object.freeze({
-    composer: ['textarea[placeholder^="Message #"]', 'textarea[placeholder^="Message"]'],
+    composer: ['textarea[placeholder^="Message #"]', 'textarea[placeholder^="Message"]', 'textarea[aria-label^="Message"]'],
     send: ['button[aria-label="Send"]'],
     stop: [],
     streaming: [],

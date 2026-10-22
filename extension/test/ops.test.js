@@ -1526,12 +1526,11 @@ test('duet.detail reads the channel and its timeline oldest first, with each aut
   }
 });
 
-test('duet.detail: a thread still running is working without a stream read; a stream snapshot that says working is too; no snapshot is unknown', async () => {
+test('duet.detail: only the stream says Claude is working, never a thread_status (an old thread can sit at needs_input); no snapshot is unknown', async () => {
   const tl = fixture('duet/timeline.json');
-  tl.data[0].thread_status = 'running';
+  tl.data[0].thread_status = 'needs_input';
   let f = fakeFetch(duetRoutes({ [DUET_TIMELINE]: jsonResponse(tl) }));
-  assert.equal((await run(createRunner({ fetch: f }), 'duet.detail', { id: DUET_CHAN }))[0].result.working, true);
-  assert.ok(!f.calls.some((c) => c.url === DUET_STREAM), 'no stream read when the timeline already shows work');
+  assert.equal((await run(createRunner({ fetch: f }), 'duet.detail', { id: DUET_CHAN }))[0].result.working, false);
   const busy = 'event: session_activity\ndata: {"session_id":"a","working":false}\n\nevent: session_activity\ndata: {"session_id":"b","working":true}\n\nevent: session_model\ndata: {}\n\n';
   f = fakeFetch(duetRoutes({ [DUET_STREAM]: streamResponse(busy) }));
   assert.equal((await run(createRunner({ fetch: f }), 'duet.detail', { id: DUET_CHAN }))[0].result.working, true);
@@ -1607,15 +1606,13 @@ test('duet.send hooks: ready waits while Claude works and then fails busy; befor
   let hooks;
   const sender = { send: async (_site, _a, h) => ((hooks = h), { conversation_id: DUET_CHAN, url: '', submitted_at: 1 }), close: async () => ({ closed: 0 }) };
   const routes = duetRoutes();
-  const tl = fixture('duet/timeline.json');
-  tl.data[0].thread_status = 'running';
-  routes[DUET_CONFIRM] = jsonResponse(tl);
+  routes[DUET_STREAM] = () => streamResponse('event: session_activity\ndata: {"session_id":"a","working":true}\n\nevent: session_model\ndata: {}\n\n');
   await run(createRunner({ fetch: fakeFetch(routes), sender, duetBusyWaitMs: 30, duetBusyPollMs: 10 }), 'duet.send', { message: 'hi', conversation_id: DUET_CHAN });
   let caught;
   await assert.rejects(hooks.ready(), (e) => ((caught = e), e.code === 'busy'));
   assert.match(errorFrame(caught).error.message, /nothing was sent/);
   // Claude finished: ready passes.
-  routes[DUET_CONFIRM] = jsonResponse(fixture('duet/timeline.json'));
+  routes[DUET_STREAM] = () => streamResponse('event: session_activity\ndata: {"session_id":"a","working":false}\n\nevent: session_model\ndata: {}\n\n');
   await hooks.ready();
   await hooks.before();
   assert.equal(await hooks.confirm(), null, 'nothing new yet');

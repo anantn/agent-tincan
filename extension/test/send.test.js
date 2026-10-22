@@ -1793,3 +1793,20 @@ test('duet.send types into the channel textarea, clicks Send, and returns the ne
   assert.equal(frames[0].result.message_id, 'cmsg_new1');
   assertOnlyFixedScripts(fc.log);
 });
+
+test('the duet selectors match a named channel and the main Duet chat (seen live)', () => {
+  const saved = { document: globalThis.document, location: globalThis.location };
+  try {
+    for (const box of ['<textarea placeholder="Message #research"></textarea>', '<textarea aria-label="Message Claude Duet"></textarea>']) {
+      globalThis.document = parseHTML(`<html><body><main>${box}<button aria-label="Send" disabled>Send</button></main></body></html>`);
+      globalThis.location = { href: DUET_PAGE, pathname: `/messages/${DUET_CHAN}`, host: 'claude.ai' };
+      const p = pageProbe(SELECTORS.duet);
+      assert.equal(p.composer, true, box);
+      assert.equal(p.composerEmpty, true, box);
+      assert.ok(document.querySelector(SELECTORS.duet.send[0]), box);
+    }
+  } finally {
+    globalThis.document = saved.document;
+    globalThis.location = saved.location;
+  }
+});

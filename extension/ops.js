@@ -714,17 +714,17 @@ function sameText(a, b) {
 // owner's messages, claude for the channel's agent, other for anyone
 // else), text and how many attachments. Server notices and messages not in
 // the timeline (thread replies) are left out, as are messages with no
-// author. working is whether any message's thread shows Claude still
-// working. A message without its id or time is endpoint_changed.
+// author. A message's thread_status is not read: it stays idle while
+// Claude works and an old thread can sit at needs_input for good, so only
+// the stream says whether Claude is working (duetWorking). A message
+// without its id or time is endpoint_changed.
 export function duetItems(r, owner, agent) {
   if (!isPlainObject(r) || !Array.isArray(r.data)) throw new OpError('endpoint_changed', 'unexpected channel timeline');
   const out = [];
-  let working = false;
   for (const m of r.data) {
     if (!isPlainObject(m) || typeof m.id !== 'string' || m.id === '' || typeof m.created_at !== 'string') {
       throw new OpError('endpoint_changed', 'unexpected channel message');
     }
-    if (typeof m.thread_status === 'string' && m.thread_status !== 'idle') working = true;
     if (m.server_notice === true || m.in_timeline === false) continue;
     const human = typeof m.author_account_id === 'string' && m.author_account_id !== '' ? m.author_account_id : '';
     const bot = typeof m.author_agent_id === 'string' && m.author_agent_id !== '' ? m.author_agent_id : '';
@@ -741,7 +741,7 @@ export function duetItems(r, owner, agent) {
     });
   }
   out.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-  return { items: out, working };
+  return { items: out };
 }
 
 // geminiId checks a Gemini conversation id (the URL's hex).
@@ -1187,7 +1187,7 @@ export function createRunner({ fetch, sender = null, reload = null, permissions 
   }
 
   // duetFeed reads the latest limit timeline messages of chan, oldest
-  // first, and whether a thread shows Claude working.
+  // first.
   async function duetFeed(auth, chan, ch, limit) {
     return duetItems(await getJSON(`${CLAUDE}/v1/code/channels/${chan}/timeline?limit=${limit}`, auth, true), ch.owner, ch.agent);
   }
@@ -1265,9 +1265,7 @@ export function createRunner({ fetch, sender = null, reload = null, permissions 
         const end = Date.now() + duetBusyWaitMs;
         for (;;) {
           ch = await duetChannel(auth, chan);
-          const f = await duetFeed(auth, chan, ch, DUET_CONFIRM_LIMIT);
-          const busy = f.working || (await duetWorking(auth, chan)) === true;
-          if (!busy) return;
+          if ((await duetWorking(auth, chan)) !== true) return;
           if (Date.now() + duetBusyPollMs > end) throw new OpError('busy', 'Claude is still working in the Duet channel; nothing was sent');
           await new Promise((resolve) => setTimeout(resolve, duetBusyPollMs));
         }
@@ -1672,8 +1670,7 @@ export function createRunner({ fetch, sender = null, reload = null, permissions 
       return sender.send('dots', a, dotHooks(auth, a.conversation_id, d, a.message));
     },
     // The channel record is read once per DUET_CHANNEL_TTL_MS per channel;
-    // later reads fetch only the timeline (and the stream when the
-    // timeline does not show Claude working). A refused or missing channel
+    // later reads fetch only the timeline and the stream. A refused or missing channel
     // drops the cached record.
     async 'duet.detail'(a) {
       const chan = duetChannelId(a.id);
@@ -1691,7 +1688,7 @@ export function createRunner({ fetch, sender = null, reload = null, permissions 
         if (e instanceof OpError && (e.code === 'not_found' || e.code === 'endpoint_changed' || e.code === 'http_error')) duetChannels.delete(chan);
         throw e;
       }
-      const working = f.working ? true : await duetWorking(auth, chan);
+      const working = await duetWorking(auth, chan);
       return { thread: chan, room: chan, owner: ch.owner, paused: false, working, items: f.items };
     },
     // A Duet channel has no new chat either, so the send needs its channel.
