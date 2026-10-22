@@ -1637,6 +1637,14 @@ test('duet.send hooks: ready waits while Claude works and then fails busy; befor
   await assert.rejects(hooks.ready(), (e) => e.code === 'channel_refused');
 });
 
+test('duet.detail counts only the channel session and threads of timeline messages as working, not an older thread', async () => {
+  const stream = (root) => () => streamResponse(`event: session_activity\ndata: {"session_id":"a","thread_root_id":"","working":false}\n\nevent: session_activity\ndata: {"session_id":"b","thread_root_id":"${root}","working":true}\n\nevent: session_model\ndata: {}\n\n`);
+  const working = async (root) => (await run(createRunner({ fetch: fakeFetch(duetRoutes({ [DUET_STREAM]: stream(root) })) }), 'duet.detail', { id: DUET_CHAN }))[0].result.working;
+  assert.equal(await working('cmsg_0000000000000000older1'), false, 'a thread off the timeline is not Claude being busy here');
+  assert.equal(await working('cmsg_0000000000000000000002'), true, 'a thread on a timeline message is');
+  assert.equal(await working(''), true, 'the channel session is');
+});
+
 test('duet.send hooks: ready types only once a read confirms Claude is not working, and never waits past the send deadline', async () => {
   let hooks;
   const sender = { send: async (_site, _a, h) => ((hooks = h), { conversation_id: DUET_CHAN, url: '', submitted_at: 1 }), close: async () => ({ closed: 0 }) };
