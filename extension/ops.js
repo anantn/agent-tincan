@@ -60,9 +60,8 @@
 // channel still the owner's) and its timeline (duetFeed). A channel that
 // is shared with anyone else, archived or not the owner's is refused on
 // every read and send (channel_refused). Whether Claude is still working
-// comes from the timeline's thread status or, failing that, one bounded
-// read of the channel's event stream (duetWorking), which is aborted as
-// soon as its first activity snapshot is in. duet.send waits a bounded
+// comes from one bounded read of the channel's event stream (duetWorking),
+// which is aborted as soon as its first activity snapshot is in. duet.send waits a bounded
 // time for Claude to finish before typing (busy), and confirms its message
 // by polling the timeline, like a dot.
 
@@ -207,8 +206,8 @@ const DOT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}~[A-Za-z0-9][A-Za-z0-9_-]{0,63
 const DOT_THREAD_RE = /^[0-9A-Fa-f-]{8,64}$/;
 // DUET_CHANNEL_RE is a Duet channel id, as claude.ai/messages/<id> shows it.
 const DUET_CHANNEL_RE = /^chan_[A-Za-z0-9]{8,64}$/;
-// DUET_API_VERSION is the anthropic-version header the channels API wants
-// (seen live; without it the API answers 400).
+// DUET_API_VERSION is the anthropic-version header the channels API wants;
+// without it the API answers 400.
 const DUET_API_VERSION = '2023-06-01';
 // DUET_FEED_LIMIT is how many of the latest timeline messages duet.detail
 // reads, DUET_CONFIRM_LIMIT how many a send's confirmation polls read.
@@ -1249,8 +1248,8 @@ export function createRunner({ fetch, sender = null, reload = null, permissions 
   // duetHooks are the sender's feed hooks for one send of message into
   // chan: page, the channel the sender opens and checks the tab's address
   // against; ready, called in the queued send right before the fill, reads
-  // the channel record again (refusing a channel shared since) and waits
-  // up to duetBusyWaitMs while Claude is working, then fails busy with
+  // the channel record again once (refusing a channel shared since) and
+  // waits up to duetBusyWaitMs while Claude is working, then fails busy with
   // nothing typed; before, right before each click, reads the record again
   // and notes the timeline's message ids; confirm returns the id of the
   // first owner message not among them whose text is the message and
@@ -1263,8 +1262,8 @@ export function createRunner({ fetch, sender = null, reload = null, permissions 
       page: chan,
       async ready() {
         const end = Date.now() + duetBusyWaitMs;
+        await duetChannel(auth, chan);
         for (;;) {
-          ch = await duetChannel(auth, chan);
           if ((await duetWorking(auth, chan)) !== true) return;
           if (Date.now() + duetBusyPollMs > end) throw new OpError('busy', 'Claude is still working in the Duet channel; nothing was sent');
           await new Promise((resolve) => setTimeout(resolve, duetBusyPollMs));
