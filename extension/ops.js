@@ -739,6 +739,18 @@ export function duetItems(r, owner, agent) {
   return { items: out };
 }
 
+// duetBusy says whether Claude is working on anything a request or its
+// answer could touch, from duetWorking's sessions and the timeline items
+// read with them: the channel's own session, or a session on a thread of a
+// message in that timeline. A session on an older thread (Claude runs
+// each thread on its own, and a long task there can run for hours) does
+// not count. It is null when the stream said nothing.
+export function duetBusy(acts, items) {
+  if (!Array.isArray(acts)) return null;
+  const ids = new Set(items.map((m) => m.id));
+  return acts.some((s) => s.working && (s.root === '' || ids.has(s.root)));
+}
+
 // geminiId checks a Gemini conversation id (the URL's hex).
 function geminiId(id) {
   if (typeof id !== 'string' || !GEMINI_ID_RE.test(id)) throw bad('invalid Gemini conversation id');
@@ -1187,14 +1199,15 @@ export function createRunner({ fetch, sender = null, reload = null, permissions 
   // duetWorking reads the channel's event stream once, for at most
   // duetStreamMs: the stream starts with an activity snapshot of each of
   // the channel's sessions, so the read takes those and aborts at the
-  // first other event. It returns true when any session is working, false
-  // when the snapshots say none is, and null when none arrived (the
-  // stream could not be read or said nothing in time).
+  // first other event. It returns each session's { root, working }, root
+  // being the message its thread hangs off ('' for the channel's own
+  // session), or null when none arrived (the stream could not be read or
+  // said nothing in time). duetBusy decides from them.
   async function duetWorking(auth, chan) {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), duetStreamMs);
     let seen = false;
-    let working = false;
+    const working = [];
     try {
       const res = await fetch(`${CLAUDE}/v1/code/channels/${chan}/messages/stream?from=tail`, {
         method: 'GET', cache: 'no-store', credentials: 'include', signal: ac.signal,
@@ -1222,7 +1235,7 @@ export function createRunner({ fetch, sender = null, reload = null, permissions 
             const d = JSON.parse((block.match(/^data: ?(.*)$/m) || [])[1]);
             if (isPlainObject(d) && typeof d.working === 'boolean') {
               seen = true;
-              working = working || d.working;
+              working.push({ root: typeof d.thread_root_id === 'string' ? d.thread_root_id : '', working: d.working });
             }
           } catch {
             // A snapshot that does not parse says nothing.
@@ -1257,9 +1270,10 @@ export function createRunner({ fetch, sender = null, reload = null, permissions 
       page: chan,
       async ready(deadline) {
         const end = Math.min(Date.now() + duetBusyWaitMs, Number.isFinite(deadline) ? deadline : Infinity);
-        await duetChannel(auth, chan);
+        const c = await duetChannel(auth, chan);
         for (;;) {
-          const working = await duetWorking(auth, chan);
+          const acts = await duetWorking(auth, chan);
+          const working = duetBusy(acts, (await duetFeed(auth, chan, c, DUET_FEED_LIMIT)).items);
           if (working === false) return;
           if (Date.now() + duetBusyPollMs > end) {
             throw new OpError('busy', working === true ? 'Claude is still working in the Duet channel; nothing was sent' : 'working state unknown');
@@ -1674,8 +1688,9 @@ export function createRunner({ fetch, sender = null, reload = null, permissions 
       const chan = duetChannelId(a.id);
       const auth = await duetAuth();
       const ch = await duetChannel(auth, chan);
-      const working = await duetWorking(auth, chan);
+      const acts = await duetWorking(auth, chan);
       const f = await duetFeed(auth, chan, ch, DUET_FEED_LIMIT);
+      const working = duetBusy(acts, f.items);
       return { thread: chan, room: chan, owner: ch.owner, paused: false, working, items: f.items };
     },
     // A Duet channel has no new chat either, so the send needs its channel.
