@@ -477,3 +477,41 @@ func TestWebInstallCustomNameAndConfig(t *testing.T) {
 		t.Fatal("installed as wrong name")
 	}
 }
+
+// A Duet channel has no primary to find, so install needs --thread; a
+// channel the extension refuses (shared, archived, not the owner's) is
+// never installed, and an unreachable extension only warns.
+func TestWebInstallDuetChecksTheChannel(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("no service definition on " + runtime.GOOS)
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	const channel = "chan_0000000000000000chan01"
+	stub := func(err error) {
+		saved := checkWebThread
+		checkWebThread = func(context.Context, history.Source, string) error { return err }
+		t.Cleanup(func() { checkWebThread = saved })
+	}
+	stub(nil)
+	if _, err := run(t, Root(), "web", "install", "--site", "duet", "--binary", "/opt/tincan/tincan"); err == nil || !strings.Contains(err.Error(), "--thread") {
+		t.Fatalf("install without --thread: %v", err)
+	}
+	stub(&history.UnavailableError{Source: history.SourceDuet, Kind: history.ErrRefused, Detail: "the Duet channel #team is shared"})
+	if _, err := run(t, Root(), "web", "install", "--site", "duet", "--thread", channel, "--binary", "/opt/tincan/tincan"); err == nil || !strings.Contains(err.Error(), "shared") {
+		t.Fatalf("install of a refused channel: %v", err)
+	}
+	stub(&history.UnavailableError{Source: history.SourceDuet, Kind: history.ErrExtensionNotConnected})
+	out, err := run(t, Root(), "web", "install", "--site", "duet", "--thread", "https://claude.ai/messages/"+channel, "--binary", "/opt/tincan/tincan")
+	if err != nil || !strings.Contains(out, "web serve checks it again") {
+		t.Fatalf("install without the extension: %v\n%s", err, out)
+	}
+	def := filepath.Join(home, ".config", "systemd", "user", "tincan-duet-web.service")
+	if runtime.GOOS == "darwin" {
+		def = filepath.Join(home, "Library", "LaunchAgents", "com.agenttincan.web.duet.plist")
+	}
+	if b, err := os.ReadFile(def); err != nil || !strings.Contains(string(b), channel) || strings.Contains(string(b), "https://") || !strings.Contains(string(b), "duet-web.json") {
+		t.Fatalf("definition %s (%v):\n%s", def, err, b)
+	}
+}
